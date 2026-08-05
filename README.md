@@ -15,21 +15,21 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
-Milestone 1 is the browser cube. Steps 0–6 of 12 are done.
+Milestone 1 is the browser cube. Steps 0–8 of 12 are done.
 
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
 | `platform/host/` — tests, benchmark, image dump | **working**, 66 test cases green |
-| `platform/wasm/` — WASM module + canvas page | **working**, verified bit-identical to host |
+| `platform/wasm/` — WASM module + three.js cube | **working**, verified bit-identical to host |
 | `platform/esp32/` — PlatformIO firmware | not written yet |
 
-Working today: water settles correctly in a 32³ cube under gravity from any direction,
-survives violent shaking without leaking, renders to six panel images with a continuous
-waterline across every seam, and runs live in a browser you can tilt with the mouse.
-Cross-target determinism is **verified**, not just intended: the WASM build produces
-bit-identical particle state and pixels to the native build. Not yet: sand behaviour, fire,
-three.js rendering, and the ESP32 firmware.
+Working today: water settles correctly in a 32³ cube under gravity from any direction, survives
+violent shaking without leaking, and runs live as a three.js cube in the browser that you tilt
+with the mouse to make it slosh. Cross-target determinism is **verified**, not just intended:
+the WASM build produces bit-identical particle state and pixels to the native build, and runs
+within 5% of native speed. Not yet: sand behaviour, fire/smoke, bloom, scene presets, and the
+ESP32 firmware.
 
 ---
 
@@ -236,14 +236,32 @@ tool prints `peak accum` for exactly this reason.
 ./scripts/serve.sh 8080      # then open http://localhost:8080/
 ```
 
-A server is required — ES modules and WASM cannot load from `file://`. The page shows the six
-panels as 2D canvases in the same unfolded-net layout as `partsim_ppm`, so the two can be
-compared directly. Drag to tilt the cube, flick and release to shake it, and the buttons cycle
-palette and reset.
+A server is required — ES modules and WASM cannot load from `file://`. There are three pages:
 
-There is deliberately **no three.js yet**: this page exists to validate the C ABI and the
-zero-copy panel views on their own, so that when 3D rendering is added, any bug is known to be
-in the 3D layer.
+| page | what it is |
+|---|---|
+| `/` | the LED cube in three.js. **Drag** tilts the object (gravity stays world-down, so it sloshes), **flick + release** shakes it, **right-drag** orbits the camera, scroll zooms. |
+| `/panels.html` | the six panels as flat 2D canvases in the same unfolded-net layout as `partsim_ppm`. Validates the C ABI and zero-copy views with no 3D involved, so a bug can be localised. |
+| `/orient.html` | panel orientation checker — see below. |
+
+three.js r170 is **vendored** in `platform/wasm/web/vendor/`, not installed via npm, so the repo
+stays dependency-free and needs no bundler. See `vendor/README.md` for the versions and how to
+upgrade.
+
+Useful query parameters, both there so headless screenshots can verify things a level tank
+cannot: `/?tilt=35` pre-rotates the cube, and `/orient.html?cam=x,y,z` moves the camera.
+
+### Checking panel orientation
+
+`/orient.html` writes a known asymmetric pattern straight into the panel buffers instead of
+running the simulation. **On every face, viewed from outside, you must see a red block at the
+bottom-left (texel 0,0), a green bar running right along +x, and a blue bar running up along
++y.** Red anywhere else means that face is flipped or mirrored.
+
+This exists because symmetrically settled water cannot reveal a mirrored face, and it shares its
+scene code with the live page (`cubeview.js`) — a checker that built its own scene would prove
+nothing about the real one. It is also the fastest way to validate a real cube's panel wiring
+later.
 
 ### Cross-target determinism
 
@@ -277,7 +295,9 @@ core/                    portable C++17 — no platform deps, no malloc after in
                          Particles SpatialHash Solver
   src/
 platform/host/           bench.cpp — inspector and benchmark
-platform/wasm/           bindings.cpp (C ABI) + web/ (canvas page)
+platform/wasm/           bindings.cpp (C ABI)
+  web/                   index.html (3D cube) panels.html orient.html cubeview.js
+  web/vendor/            pinned three.js r170 + OrbitControls (MIT, committed on purpose)
 platform/esp32/          (not yet) PlatformIO firmware
 tests/                   hand-rolled harness (check.h) + test_*.cpp
 scripts/                 build_wasm.sh serve.sh check_determinism.mjs
@@ -319,15 +339,23 @@ are *verified* bit-identical by `wasm_determinism`; the ESP32 joins that check i
 and detaches the old one, silently zero-lengthing the cached panel views — black canvases with
 no error anywhere. Nothing is allocated after init, so growth would buy nothing.
 
-**Panel row 0 is the bottom row.** That matches WebGL's bottom-left texture origin, so the
-three.js path will need no flip. Canvas 2D is the odd one out (row 0 at the top) and flips when
-blitting; forget it and the water pools at the ceiling.
+**Panel row 0 is the bottom row.** That matches WebGL's bottom-left texture origin, and
+`DataTexture` defaults to `flipY = false`, so the three.js path needs no flip at all. Canvas 2D
+is the odd one out (row 0 at the top) and flips when blitting; forget it and the water pools at
+the ceiling.
+
+**Panel quads use `THREE.BackSide`.** The basis `(u, v, n)` is right-handed with `n` pointing
+*inward*, so a plane built from it faces into the volume while we view it from outside. Building
+`(-u, v, -n)` to face outward would mirror the texture horizontally instead.
 
 **Container acceleration has the sign you might not expect.** `addContainerAccel` takes the
 acceleration of the *container*, so pushing the cube up presses the fluid down and shoving it
 right piles the water left. That is correct — inside a container its acceleration is
 indistinguishable from gravity the other way — and it is named for the container precisely
 because `addJerk(up)` reads as "throw the water up", which is backwards.
+
+**WASM costs almost nothing.** Measured: 6.52 ms/step in WASM vs 6.24 ms native at 3000
+particles — within 5%. The browser is a fair preview of the physics, not a slow approximation.
 
 **Splatting is cheap; the solver is the cost.** Measured on the host, rendering six 32×32
 panels is 3–4% of one solver step. Contrary to expectation the renderer is not the

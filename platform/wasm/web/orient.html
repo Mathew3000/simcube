@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>partsim — panel orientation check</title>
+<style>
+  :root { color-scheme: dark; --fg: #e8eef5; --dim: #7d8b9c; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05070a; color: var(--fg);
+               font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  canvas { display: block; }
+  #ui { position: fixed; left: 16px; top: 14px; pointer-events: none; text-shadow: 0 1px 3px #000; }
+  #ui h1 { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+  #ui p { margin: 0 0 2px; color: var(--dim); max-width: 56ch; }
+  #ui .key b { font-weight: 600; }
+  .r { color: #ff5c5c; } .g { color: #5cff8a; } .b { color: #6aa8ff; }
+  #hud { position: fixed; left: 16px; bottom: 14px; color: var(--dim); }
+  a { color: var(--dim); }
+</style>
+
+<div id="ui">
+  <h1>panel orientation check</h1>
+  <p>
+    A known asymmetric pattern is written straight into the panel buffers instead of running the
+    simulation. Water settling symmetrically cannot reveal a mirrored face; this can.
+  </p>
+  <p class="key">
+    On <b>every</b> face, viewed from outside, you must see:
+    a <b class="r">red</b> square at the <b>bottom-left</b> (texel 0,0),
+    a <b class="g">green</b> bar running <b>right</b> along +x,
+    and a <b class="b">blue</b> bar running <b>up</b> along +y.
+  </p>
+  <p>
+    Red anywhere but bottom-left means that face is flipped or mirrored. Right-drag to orbit.
+  </p>
+</div>
+
+<div id="hud"><a href="./">live simulation</a> · <a href="./panels.html">panel view</a></div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+
+<script type="module">
+import { createCubeView } from './cubeview.js';
+import createPartsim from './public/partsim.mjs';
+
+const mod = await createPartsim();
+mod._ps_init(0, 100, 1);
+
+const view = createCubeView(mod);
+const { renderer, scene, camera, controls, panels } = view;
+
+// ?cam=x,y,z moves the camera, so the other three faces can be inspected too (and captured in
+// a headless screenshot).
+const camParam = new URLSearchParams(location.search).get('cam');
+if (camParam) {
+  const [x, y, z] = camParam.split(',').map(Number);
+  if ([x, y, z].every(Number.isFinite)) { camera.position.set(x, y, z); controls.update(); }
+}
+
+// Paint the pattern directly into the WASM-owned panel buffers. This is exactly the memory the
+// simulation would write, so if the pattern lands correctly the simulation's pixels will too.
+for (const p of panels) {
+  const { view: px, w, h } = p;
+  px.fill(0);
+  const set = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return;
+    const o = (y * w + x) * 4;
+    px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+  };
+
+  // Dim ground so the face's extent is visible at all.
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) set(x, y, 8, 10, 16);
+  // Red 4x4 block at texel (0,0) -- the bottom-left corner as seen from OUTSIDE.
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) set(x, y, 255, 40, 40);
+  // Green bar along +x, tapering so its direction is unambiguous.
+  for (let x = 5; x < w - 2; x++) for (let y = 0; y < Math.max(1, 4 - ((x - 5) >> 3)); y++)
+    set(x, y, 40, 230, 90);
+  // Blue bar along +y, likewise tapering.
+  for (let y = 5; y < h - 2; y++) for (let x = 0; x < Math.max(1, 4 - ((y - 5) >> 3)); x++)
+    set(x, y, 70, 150, 255);
+  // A single bright marker near the far corner, so a 180-degree rotation is also obvious.
+  for (let y = h - 5; y < h - 1; y++) for (let x = w - 5; x < w - 1; x++)
+    set(x, y, 255, 255, 255);
+
+  p.tex.needsUpdate = true;
+}
+
+function frame() {
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>

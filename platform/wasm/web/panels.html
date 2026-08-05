@@ -1,0 +1,191 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>partsim — panel / ABI check</title>
+<style>
+  :root { color-scheme: dark; --fg: #e8eef5; --dim: #7d8b9c; --line: #253040; }
+  body { margin: 0; padding: 24px; background: #0a0d12; color: var(--fg);
+         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  p.sub { color: var(--dim); margin: 0 0 20px; max-width: 62ch; }
+
+  /* The unfolded cube net, laid out exactly like ppm_dump's output so the two can be
+     compared directly:
+              [+Y]
+         [-X] [-Z] [+X] [+Z]
+              [-Y]                                                                   */
+  #net { display: grid; grid-template-columns: repeat(4, 128px);
+         grid-template-rows: repeat(3, 128px); gap: 2px; width: max-content; }
+  #net canvas { width: 128px; height: 128px; background: #05070a;
+                border: 1px solid var(--line); image-rendering: pixelated; }
+  .slot { position: relative; }
+  .slot span { position: absolute; left: 4px; bottom: 2px; font-size: 10px;
+               color: var(--dim); pointer-events: none; }
+
+  #hud { margin-top: 20px; display: flex; gap: 24px; flex-wrap: wrap;
+         color: var(--dim); align-items: center; }
+  #hud b { color: var(--fg); font-weight: 600; }
+  button { font: inherit; background: #141a23; color: var(--fg);
+           border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button:hover { border-color: #3b4c63; }
+  #err { color: #ff8080; white-space: pre-wrap; }
+</style>
+
+<h1>partsim — WASM ABI check</h1>
+<p class="sub">
+  Six 2D canvases blitted straight out of the WASM heap, no three.js involved. Drag anywhere to
+  tilt the cube; flick and release to shake it. This exists to validate the C ABI and the
+  zero-copy panel views on their own, before any 3D rendering is layered on top.
+</p>
+
+<div id="net"></div>
+
+<div id="hud">
+  <span>fps <b id="fps">–</b></span>
+  <span>sim <b id="sim">–</b> ms</span>
+  <span>render <b id="render">–</b> ms</span>
+  <span>particles <b id="parts">–</b></span>
+  <span>substeps <b id="sub">–</b></span>
+  <button id="palette">palette</button>
+  <button id="reset">reset</button>
+  <span id="err"></span>
+</div>
+
+<script type="module">
+import createPartsim from './public/partsim.mjs';
+
+const NET = [           // panel index -> [column, row] in the net
+  [5, 1, 0, '+Y top'],
+  [2, 0, 1, '-X'], [0, 1, 1, '-Z'], [3, 2, 1, '+X'], [1, 3, 1, '+Z'],
+  [4, 1, 2, '-Y bottom'],
+];
+
+const err = document.getElementById('err');
+let mod;
+try {
+  mod = await createPartsim();
+} catch (e) {
+  err.textContent = `failed to load WASM: ${e.message}\nRun scripts/build_wasm.sh, then serve over http (not file://).`;
+  throw e;
+}
+
+const PARTICLES = 3000;
+mod._ps_init(0, PARTICLES, 0xc0ffee);
+
+// --- panel views -----------------------------------------------------------
+// Built exactly ONCE. This is only safe because the module is compiled with
+// ALLOW_MEMORY_GROWTH=0: growing the heap would swap in a new ArrayBuffer and silently detach
+// every one of these views, giving black canvases with no error anywhere.
+const panels = [];
+const net = document.getElementById('net');
+for (const [idx, col, row, label] of NET) {
+  const w = mod._ps_panel_w(idx), h = mod._ps_panel_h(idx);
+  const slot = document.createElement('div');
+  slot.className = 'slot';
+  slot.style.gridColumn = col + 1;
+  slot.style.gridRow = row + 1;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const tag = document.createElement('span');
+  tag.textContent = label;
+  slot.append(cv, tag);
+  net.append(slot);
+
+  panels.push({
+    idx, w, h,
+    ctx: cv.getContext('2d'),
+    view: new Uint8Array(mod.HEAPU8.buffer, mod._ps_panel_ptr(idx), w * h * 4),
+    image: new ImageData(w, h),
+  });
+}
+
+// --- interaction -----------------------------------------------------------
+// Dragging rotates the OBJECT, not the camera: gravity stays world-down, so tilting makes the
+// water actually slosh. Rotating a camera would look identical and do nothing.
+let quat = [0, 0, 0, 1];
+const mul = (a, b) => [
+  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+];
+const axisAngle = (x, y, z, a) => {
+  const s = Math.sin(a / 2);
+  return [x * s, y * s, z * s, Math.cos(a / 2)];
+};
+
+let dragging = false, lastX = 0, lastY = 0, velX = 0, velY = 0;
+addEventListener('pointerdown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; velX = velY = 0; });
+addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  velX = dx; velY = dy;
+  quat = mul(mul(axisAngle(0, 1, 0, dx * 0.01), axisAngle(1, 0, 0, dy * 0.01)), quat);
+});
+addEventListener('pointerup', () => {
+  if (!dragging) return;
+  dragging = false;
+  // A quick flick becomes a world-space impulse; a slow release does nothing.
+  const speed = Math.hypot(velX, velY);
+  if (speed > 6) mod._ps_add_jerk(...quat, velX * 2.0, -velY * 2.0, 0);
+});
+
+let paletteIdx = 0;
+document.getElementById('palette').onclick = () => {
+  paletteIdx = (paletteIdx + 1) % mod._ps_palette_count();
+  mod._ps_set_palette(paletteIdx);
+};
+document.getElementById('reset').onclick = () => {
+  mod._ps_init(0, PARTICLES, 0xc0ffee);
+  mod._ps_set_palette(paletteIdx);
+  quat = [0, 0, 0, 1];
+};
+
+// --- frame loop ------------------------------------------------------------
+const el = {
+  fps: document.getElementById('fps'), sim: document.getElementById('sim'),
+  render: document.getElementById('render'), parts: document.getElementById('parts'),
+  sub: document.getElementById('sub'),
+};
+let prev = performance.now(), fpsAcc = 0, fpsN = 0, hudAt = 0;
+
+function frame(now) {
+  const dt = Math.min((now - prev) / 1000, 0.25);
+  prev = now;
+
+  mod._ps_set_orientation(...quat);
+
+  const t0 = performance.now();
+  const substeps = mod._ps_advance(dt);
+  const t1 = performance.now();
+  mod._ps_render();
+  const t2 = performance.now();
+  mod._ps_set_stats_timing(t1 - t0, t2 - t1);
+
+  for (const p of panels) {
+    // Panel row 0 is the BOTTOM row of the face -- that convention matches WebGL's
+    // bottom-left texture origin, so the three.js path will consume these buffers with no
+    // flip at all. Canvas 2D puts row 0 at the TOP, so it is the odd one out and has to flip
+    // here. Without this the water pools at the ceiling.
+    const stride = p.w * 4;
+    for (let j = 0; j < p.h; j++)
+      p.image.data.set(p.view.subarray(j * stride, j * stride + stride),
+                       (p.h - 1 - j) * stride);
+    p.ctx.putImageData(p.image, 0, 0);
+  }
+
+  fpsAcc += dt; fpsN++;
+  if (now - hudAt > 250) {
+    hudAt = now;
+    const s = new Float32Array(mod.HEAPF32.buffer, mod._ps_stats(), 4);
+    el.fps.textContent = (fpsN / fpsAcc).toFixed(0);
+    el.sim.textContent = s[0].toFixed(2);
+    el.render.textContent = s[1].toFixed(2);
+    el.parts.textContent = s[2].toFixed(0);
+    el.sub.textContent = substeps;
+    fpsAcc = 0; fpsN = 0;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
