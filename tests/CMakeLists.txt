@@ -4,6 +4,7 @@ add_executable(partsim_tests
   test_geometry.cpp
   test_hash.cpp
   test_solver.cpp
+  test_renderer.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

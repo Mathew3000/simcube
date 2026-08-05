@@ -15,18 +15,19 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
-Milestone 1 is the browser cube. Steps 0–4 of 12 are done.
+Milestone 1 is the browser cube. Steps 0–5 of 12 are done.
 
 | | state |
 |---|---|
-| `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver **working** |
-| `platform/host/` — tests + benchmark | **working**, 44 test cases green |
-| `platform/wasm/` — browser frontend | not written yet |
+| `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
+| `platform/host/` — tests, benchmark, image dump | **working**, 57 test cases green |
+| `platform/wasm/` — browser frontend | not written yet (toolchain installed) |
 | `platform/esp32/` — PlatformIO firmware | not written yet |
 
 Working today: water settles correctly in a 32³ cube under gravity from any direction,
-survives violent shaking without leaking, and is bit-deterministic. Not yet: sand, fire,
-rendering to pixels, and either platform frontend.
+survives violent shaking without leaking, renders to six panel images with a continuous
+waterline across every seam, and is bit-deterministic. Not yet: sand behaviour, fire, and
+either platform frontend.
 
 ---
 
@@ -44,9 +45,15 @@ no package manager, no network access at build time — the test harness is hand
 
 Needed later, **not yet**:
 
-- `emsdk` (Emscripten) for the browser build — a ~1 GB download, so it is deliberately
-  deferred until step 6.
 - `pipx install platformio` for the ESP32 firmware — Milestone 2.
+
+Emscripten **is** installed at `~/emsdk` for the upcoming browser build. Note that emsdk
+needs Python ≥3.10 and macOS ships 3.9 with Xcode, so it must be pointed at a newer one:
+
+```sh
+export EMSDK_PYTHON=/opt/homebrew/bin/python3.12
+source ~/emsdk/emsdk_env.sh
+```
 
 ---
 
@@ -58,7 +65,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect two ctest entries to pass: `unit` (44 cases, ~4 s) and `no_libm` (a source guard,
+Expect two ctest entries to pass: `unit` (57 cases, ~6 s) and `no_libm` (a source guard,
 explained below).
 
 ### Running a subset of tests
@@ -172,6 +179,48 @@ FINAL mean|v| 0.000  max|v| 0.00  rho 1.0141  moving 0.0%  fill 9.4 (want 9.9)  
 
 ---
 
+## Rendering images (no browser needed)
+
+`partsim_ppm` settles a tank, renders the six cube faces, and writes PPM images plus an
+unfolded cube net. This exists so the visual concept can be judged without a browser, WASM
+or GL anywhere in the loop.
+
+```sh
+mkdir -p out
+./build/platform/host/partsim_ppm 3000        # scenes at the default exposure
+./build/platform/host/partsim_ppm 3000 exp    # sweep exposure instead
+```
+
+Writes `out/net_<scene>.ppm` (the unfolded net) and `out/<scene>_<n>_<face>.ppm` per face.
+Scenes are `settled`, `tilted`, `falling`, `half` and `neon`.
+
+The net is laid out as the standard cross, so the horizontal strip reads as a continuous walk
+around the cube's sides — **a waterline that jumps at a seam means the panel mapping is
+wrong**:
+
+```
+       [+Y]
+  [-X] [-Z] [+X] [+Z]
+       [-Y]
+```
+
+The `tilted` scene is the useful one: gravity at an angle should produce a straight slanted
+waterline that stays continuous across all four side faces.
+
+If your viewer does not open PPM, any of these work:
+
+```sh
+magick out/net_tilted.ppm out/net_tilted.png     # ImageMagick, if installed
+open out/net_tilted.ppm                          # macOS Preview handles PPM
+```
+
+Exposure is the accumulated intensity mapping to the top of a colour ramp
+(`kSplatExposure`). It is **measured, not guessed** — a dense water texel peaks near 6500,
+and setting it too low clips everything to near-white and throws the whole ramp away. The
+tool prints `peak accum` for exactly this reason.
+
+---
+
 ## Layout
 
 ```
@@ -217,6 +266,10 @@ capacity, so it must live in static or heap storage — never on the stack.
 clock-seeded), `-ffp-contract=off` everywhere, no `-ffast-math`, and no libm. The goal is
 that host, browser and ESP32 produce bit-identical trajectories.
 
+**Splatting is cheap; the solver is the cost.** Measured on the host, rendering six 32×32
+panels is 3–4% of one solver step. Contrary to expectation the renderer is not the
+bottleneck, so optimisation effort belongs in the neighbour search.
+
 **Two iterations, not more.** 2 solver iterations settle *better* than 3 or 6 (mean speed
 0.03 vs 0.30 at 3000 particles) and cost 28% less. More is not better here.
 
@@ -238,5 +291,11 @@ before suspecting convergence.
 - **Non-cube panel arrangements use the bounding box as the container.** For an L-shape the
   physics happens in the full box while the panels illuminate only part of it. Per-panel
   inward half-space constraints are the eventual fix.
+- **Cube edges show a slightly dark seam.** A particle at an edge has its splat footprint
+  truncated by the panel boundary, so the edge columns receive less energy. Real HUB75 panels
+  have a physical frame at exactly those seams, so this is being left alone for now.
+- **Water climbs the vertical edges a little.** The wall-density term sums one axis at a
+  time, so a corner double-counts the hidden region and the solver pushes fluid out of it.
+  The fix is a product of per-axis visible fractions rather than a sum.
 - **Rotation is approximated.** Feeding only a gravity vector reproduces sloshing but omits
   Coriolis and centrifugal terms, so a fast spin will look under-energetic.

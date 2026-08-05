@@ -5,6 +5,8 @@ add_library(partsim_core STATIC
   src/SimVolume.cpp
   src/SpatialHash.cpp
   src/Solver.cpp
+  src/Renderer.cpp
+  src/PaletteData.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)

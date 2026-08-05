@@ -1,0 +1,146 @@
+#include "partsim/Renderer.h"
+
+#include <cstddef>
+
+namespace partsim {
+namespace {
+
+// Which accumulation channel a material writes into.
+inline int channelOf(uint8_t material) {
+  return material == kSand ? (int)kChSand : (int)kChWater;
+}
+
+inline uint16_t satAdd(uint16_t a, int b) {
+  const int s = (int)a + b;
+  return (uint16_t)(s > 65535 ? 65535 : s);
+}
+
+}  // namespace
+
+void Renderer::init(const Geometry& g) {
+  panels_ = g.count();
+  for (int i = 0; i < panels_; ++i) texels_[i] = (int)g.at(i).w * (int)g.at(i).h;
+  if (!palette_) palette_ = &paletteNaturalistic();
+
+  // Depth attenuation: (1 - d/D)^2, so full brightness against the glass falling smoothly to
+  // exactly zero at D. Squared rather than linear because it reads more like light scattering
+  // through a translucent medium.
+  attenScale_ = (float)kAttenSize / kSplatInfluence;
+  for (int q = 0; q <= kAttenSize; ++q) {
+    const float t = 1.0f - (float)q / (float)kAttenSize;
+    atten_[q] = (uint8_t)(255.0f * t * t + 0.5f);
+  }
+  atten_[kAttenSize] = 0;
+
+  // Radial kernel over squared distance in texels, out to the footprint edge. Gaussian-ish
+  // but forced to zero at the rim so the footprint really is bounded.
+  const float rMax = (float)kSplatFootprint + 0.5f;
+  kernelScale_ = (float)kKernelSize / (rMax * rMax);
+  for (int q = 0; q <= kKernelSize; ++q) {
+    const float r2 = (float)q / kernelScale_;
+    const float t = 1.0f - r2 / (rMax * rMax);
+    kernel_[q] = (uint8_t)(255.0f * pmax(0.0f, t * t) + 0.5f);
+  }
+  kernel_[kKernelSize] = 0;
+
+  clear();
+}
+
+void Renderer::clear() {
+  for (int k = 0; k < panels_; ++k) {
+    const int n = texels_[k] * kChannelCount;
+    for (int i = 0; i < n; ++i) accum_[k][i] = 0;
+  }
+}
+
+void Renderer::splat(const Particles& p, const Geometry& g) {
+  const int n = p.n;
+  for (int i = 0; i < n; ++i) {
+    const Vec3 q = p.pos(i);
+    const int ch = channelOf(p.mat[i]);
+
+    // Brute force over panels. With at most 8 of them the rejection test is one dot product
+    // each, and any acceleration structure would cost more than it saves -- while also
+    // breaking the property that a particle in a corner correctly lights three faces.
+    for (int k = 0; k < panels_; ++k) {
+      const Panel& pan = g.at(k);
+      const Vec3 d = q - pan.origin;
+      const float dist = dot(d, pan.n);
+      if (dist < 0.0f || dist >= kSplatInfluence) continue;
+
+      const float s = dot(d, pan.u) * pan.invU2;
+      const float t = dot(d, pan.v) * pan.invV2;
+
+      const int i0 = imax(0, (int)s - kSplatFootprint);
+      const int i1 = imin((int)pan.w - 1, (int)s + kSplatFootprint);
+      const int j0 = imax(0, (int)t - kSplatFootprint);
+      const int j1 = imin((int)pan.h - 1, (int)t + kSplatFootprint);
+      if (i0 > i1 || j0 > j1) continue;
+
+      const int a = atten_[(int)(dist * attenScale_)];
+      if (a == 0) continue;
+
+      uint16_t* dst = accum_[k];
+      const int w = (int)pan.w;
+      for (int j = j0; j <= j1; ++j) {
+        const float dy = ((float)j + 0.5f) - t;
+        const float dy2 = dy * dy;
+        for (int ii = i0; ii <= i1; ++ii) {
+          const float dx = ((float)ii + 0.5f) - s;
+          const int kq = (int)((dx * dx + dy2) * kernelScale_);
+          if (kq >= kKernelSize) continue;
+          // >> 6 rather than >> 8: at >> 8 a single particle's contribution maxes out at 255
+          // and the dim tail of the falloff rounds to zero, truncating the outer glow. Two
+          // extra bits keep that tail, and a dense texel still only reaches ~6500 of the
+          // 65535 a uint16 holds.
+          const int contrib = (a * kernel_[kq]) >> 6;
+          if (contrib == 0) continue;
+          uint16_t& cell = dst[((j * w) + ii) * kChannelCount + ch];
+          cell = satAdd(cell, contrib);
+        }
+      }
+    }
+  }
+}
+
+void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
+  const uint16_t* src = accum_[panel];
+  const int n = texels_[panel];
+  const Palette& pal = *palette_;
+  const float toLevel = 255.0f / fullScale_;
+
+  for (int i = 0; i < n; ++i) {
+    const uint16_t aw = src[i * kChannelCount + kChWater];
+    const uint16_t as = src[i * kChannelCount + kChSand];
+    const uint16_t ah = src[i * kChannelCount + kChHeat];
+
+    int r = 0, gg = 0, b = 0;
+    uint8_t c[3];
+    if (aw) {
+      rampLookup(pal.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
+      r += c[0]; gg += c[1]; b += c[2];
+    }
+    if (as) {
+      rampLookup(pal.sand, iclamp((int)((float)as * toLevel), 0, 255), c);
+      r += c[0]; gg += c[1]; b += c[2];
+    }
+    if (ah) {
+      rampLookup(pal.heat, iclamp((int)((float)ah * toLevel), 0, 255), c);
+      r += c[0]; gg += c[1]; b += c[2];
+    }
+
+    uint8_t* o = out + (std::size_t)i * (std::size_t)bytesPerTexel;
+    o[0] = (uint8_t)imin(255, r);
+    o[1] = (uint8_t)imin(255, gg);
+    o[2] = (uint8_t)imin(255, b);
+    if (bytesPerTexel == 4) o[3] = 255;
+  }
+}
+
+void Renderer::render(const Particles& p, const Geometry& g) {
+  clear();
+  splat(p, g);
+  for (int k = 0; k < panels_; ++k) resolve(k, pixels_[k], 4);
+}
+
+}  // namespace partsim

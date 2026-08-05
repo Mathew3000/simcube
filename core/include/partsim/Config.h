@@ -84,6 +84,10 @@ struct MaterialParams {
 constexpr float kSplatInfluence = 8.0f;  // depth beyond which a particle lights nothing
 constexpr int kSplatFootprint = 2;       // kernel half-width in texels
 constexpr int kAttenLutSize = 64;
+// Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
+// water texel peaks around 6500 at these kernel constants, and setting this too low clips
+// everything to white and throws the whole ramp away.
+constexpr float kSplatExposure = 7200.0f;
 enum Channel : uint8_t { kChWater = 0, kChSand = 1, kChHeat = 2, kChannelCount = 3 };
 
 }  // namespace partsim

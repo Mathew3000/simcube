@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "partsim/Renderer.h"
 #include "partsim/Rng.h"
 #include "partsim/Solver.h"
 
@@ -16,6 +17,7 @@ namespace {
 Particles g_p;
 SpatialHash g_h;
 Solver g_solver;
+Renderer g_renderer;
 float g_scratch[kMaxParticles];
 
 const char* faceName(int i) {
@@ -219,7 +221,21 @@ void hydrostatic(int count, int steps, int iters, float damping, float eps, int 
 
   probeDensity(g_p, v, g_h, g_solver);
   if (!quiet) profile(g_p, v, g_h, g_solver);
+  // Render cost, measured separately from the solver: the plan flagged that splatting could
+  // dominate on the ESP32, and the only way to know is to time them apart.
+  g_renderer.init(g);
+  double renderMs = 0.0;
+  for (int i = 0; i < 50; ++i) {
+    const auto t0 = std::chrono::steady_clock::now();
+    g_renderer.render(g_p, g);
+    renderMs += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - t0).count();
+  }
+  renderMs /= 50.0;
+
   const Diag d = diagnose(g_p, v, g_h, g_solver);
+  std::printf("RENDER %.3f ms/frame for %d panels (%.1f%% of a solver step)\n", renderMs,
+              g.count(), 100.0 * renderMs / (totalMs / steps));
   std::printf("FINAL mean|v| %6.3f  max|v| %6.2f  rho %.4f  moving %5.1f%%  "
               "fill %4.1f (want %.1f)  outside %d  %6.3f ms/step\n",
               d.meanSpeed, d.maxSpeed, d.meanDensityAll, 100.0 * d.fastFraction,
