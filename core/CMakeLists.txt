@@ -7,6 +7,7 @@ add_library(partsim_core STATIC
   src/Solver.cpp
   src/Renderer.cpp
   src/PaletteData.cpp
+  src/Simulation.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)

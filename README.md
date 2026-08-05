@@ -15,19 +15,21 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
-Milestone 1 is the browser cube. Steps 0–5 of 12 are done.
+Milestone 1 is the browser cube. Steps 0–6 of 12 are done.
 
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
-| `platform/host/` — tests, benchmark, image dump | **working**, 57 test cases green |
-| `platform/wasm/` — browser frontend | not written yet (toolchain installed) |
+| `platform/host/` — tests, benchmark, image dump | **working**, 66 test cases green |
+| `platform/wasm/` — WASM module + canvas page | **working**, verified bit-identical to host |
 | `platform/esp32/` — PlatformIO firmware | not written yet |
 
 Working today: water settles correctly in a 32³ cube under gravity from any direction,
 survives violent shaking without leaking, renders to six panel images with a continuous
-waterline across every seam, and is bit-deterministic. Not yet: sand behaviour, fire, and
-either platform frontend.
+waterline across every seam, and runs live in a browser you can tilt with the mouse.
+Cross-target determinism is **verified**, not just intended: the WASM build produces
+bit-identical particle state and pixels to the native build. Not yet: sand behaviour, fire,
+three.js rendering, and the ESP32 firmware.
 
 ---
 
@@ -65,8 +67,14 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect two ctest entries to pass: `unit` (57 cases, ~6 s) and `no_libm` (a source guard,
-explained below).
+Expect four ctest entries to pass:
+
+| test | what it checks |
+|---|---|
+| `unit` | 66 cases, ~9 s |
+| `no_libm` | `core/` calls no nondeterministic libm (see below) |
+| `wasm_determinism` | WASM output is bit-identical to host — **skips loudly** if the WASM build is absent |
+| `golden_hash_current` | `scripts/golden_hash.txt` is not a stale reference |
 
 ### Running a subset of tests
 
@@ -221,6 +229,46 @@ tool prints `peak accum` for exactly this reason.
 
 ---
 
+## The browser build
+
+```sh
+./scripts/build_wasm.sh      # emcc -> platform/wasm/web/public/
+./scripts/serve.sh 8080      # then open http://localhost:8080/
+```
+
+A server is required — ES modules and WASM cannot load from `file://`. The page shows the six
+panels as 2D canvases in the same unfolded-net layout as `partsim_ppm`, so the two can be
+compared directly. Drag to tilt the cube, flick and release to shake it, and the buttons cycle
+palette and reset.
+
+There is deliberately **no three.js yet**: this page exists to validate the C ABI and the
+zero-copy panel views on their own, so that when 3D rendering is added, any bug is known to be
+in the 3D layer.
+
+### Cross-target determinism
+
+This is the project's central promise — that the browser shows you what the ESP32 will do —
+and it is now checked rather than hoped for:
+
+```sh
+node scripts/check_determinism.mjs
+# wasm  state c2d5daf4  pixels 52a0f576
+# host  state c2d5daf4  pixels 52a0f576
+```
+
+Both targets run the *same* scripted motion sequence (`goldenHash` in `core/`, deliberately not
+duplicated per harness so the two cannot drift), then hash particle state and rendered pixels.
+The fixed timestep, the seeded RNG, `-ffp-contract=off` and the libm ban all exist to make this
+pass.
+
+If you intentionally change the solver or renderer, regenerate the reference:
+
+```sh
+./build/platform/host/partsim_golden -q > scripts/golden_hash.txt
+```
+
+---
+
 ## Layout
 
 ```
@@ -229,10 +277,11 @@ core/                    portable C++17 — no platform deps, no malloc after in
                          Particles SpatialHash Solver
   src/
 platform/host/           bench.cpp — inspector and benchmark
-platform/wasm/           (not yet) browser frontend
+platform/wasm/           bindings.cpp (C ABI) + web/ (canvas page)
 platform/esp32/          (not yet) PlatformIO firmware
 tests/                   hand-rolled harness (check.h) + test_*.cpp
-scripts/                 check_no_libm.sh
+scripts/                 build_wasm.sh serve.sh check_determinism.mjs
+                         check_no_libm.sh check_wasm.sh check_golden.sh golden_hash.txt
 ```
 
 Compile-time capacities are CMake cache variables, so the ESP32 build can shrink the static
@@ -263,8 +312,22 @@ has ~230 KB of internal SRAM and no room for surprises. `Particles` is ~700 KB a
 capacity, so it must live in static or heap storage — never on the stack.
 
 **Determinism is a feature, not an accident.** Fixed timestep, seeded xoshiro128** (never
-clock-seeded), `-ffp-contract=off` everywhere, no `-ffast-math`, and no libm. The goal is
-that host, browser and ESP32 produce bit-identical trajectories.
+clock-seeded), `-ffp-contract=off` everywhere, no `-ffast-math`, and no libm. Host and browser
+are *verified* bit-identical by `wasm_determinism`; the ESP32 joins that check in Milestone 2.
+
+**`ALLOW_MEMORY_GROWTH` must stay off in the WASM build.** Growth swaps in a new `ArrayBuffer`
+and detaches the old one, silently zero-lengthing the cached panel views — black canvases with
+no error anywhere. Nothing is allocated after init, so growth would buy nothing.
+
+**Panel row 0 is the bottom row.** That matches WebGL's bottom-left texture origin, so the
+three.js path will need no flip. Canvas 2D is the odd one out (row 0 at the top) and flips when
+blitting; forget it and the water pools at the ceiling.
+
+**Container acceleration has the sign you might not expect.** `addContainerAccel` takes the
+acceleration of the *container*, so pushing the cube up presses the fluid down and shoving it
+right piles the water left. That is correct — inside a container its acceleration is
+indistinguishable from gravity the other way — and it is named for the container precisely
+because `addJerk(up)` reads as "throw the water up", which is backwards.
 
 **Splatting is cheap; the solver is the cost.** Measured on the host, rendering six 32×32
 panels is 3–4% of one solver step. Contrary to expectation the renderer is not the
