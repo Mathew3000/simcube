@@ -116,7 +116,7 @@ TEST(geometry_rejects_overfull_table) {
 
 TEST(volume_cube_bounds_are_exactly_res_cubed) {
   const Geometry g = Geometry::cube(32, 1.0f);
-  const Aabb b = g.bounds(2.0f);
+  const Aabb b = g.bounds(kSlabDepth);
   CHECK_NEAR(b.size().x, 32.0f, 1e-4);
   CHECK_NEAR(b.size().y, 32.0f, 1e-4);
   CHECK_NEAR(b.size().z, 32.0f, 1e-4);
@@ -125,15 +125,15 @@ TEST(volume_cube_bounds_are_exactly_res_cubed) {
 
 TEST(volume_slab_bounds_get_depth_from_the_inward_push) {
   const Geometry g = Geometry::slab(32, 32, 1.0f);
-  const Aabb b = g.bounds(2.0f);
+  const Aabb b = g.bounds(kSlabDepth);
   CHECK_NEAR(b.size().x, 32.0f, 1e-4);
   CHECK_NEAR(b.size().y, 32.0f, 1e-4);
-  CHECK_NEAR(b.size().z, 2.0f, 1e-4);  // zero-thickness quad + 2 texels inward
+  CHECK_NEAR(b.size().z, kSlabDepth, 1e-4);  // zero-thickness quad + inward push
 }
 
 TEST(volume_grid_dims_for_cube) {
   SimVolume v;
-  CHECK(v.build(Geometry::cube(32, 1.0f), 2.0f, kCellSize));
+  CHECK(v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize));
   CHECK(v.dim().x == 11);  // ceil(32 / 3)
   CHECK(v.dim().y == 11);
   CHECK(v.dim().z == 11);
@@ -142,24 +142,24 @@ TEST(volume_grid_dims_for_cube) {
 
 TEST(volume_grid_dims_for_slab) {
   SimVolume v;
-  CHECK(v.build(Geometry::slab(32, 32, 1.0f), 2.0f, kCellSize));
+  CHECK(v.build(Geometry::slab(32, 32, 1.0f), kSlabDepth, kCellSize));
   CHECK(v.dim().x == 11);
   CHECK(v.dim().y == 11);
-  CHECK(v.dim().z == 1);  // 2 units of depth is less than one 3-unit cell
-  CHECK(v.cellCount() == 121);
+  CHECK(v.dim().z == 2);  // 4.5 units of depth spans two 3-unit cells
+  CHECK(v.cellCount() == 11 * 11 * 2);
 }
 
 TEST(volume_rejects_cell_smaller_than_smoothing_radius) {
   // This is the invariant whose violation looks like a solver bug rather than a search
   // bug: a too-small cell makes the 27-cell gather silently miss neighbours.
   SimVolume v;
-  CHECK(!v.build(Geometry::cube(32, 1.0f), 2.0f, kSmoothRadius * 0.5f));
-  CHECK(v.build(Geometry::cube(32, 1.0f), 2.0f, kSmoothRadius));
+  CHECK(!v.build(Geometry::cube(32, 1.0f), kSlabDepth, kSmoothRadius * 0.5f));
+  CHECK(v.build(Geometry::cube(32, 1.0f), kSlabDepth, kSmoothRadius));
 }
 
 TEST(volume_coord_clamps_and_flattens_uniquely) {
   SimVolume v;
-  CHECK(v.build(Geometry::cube(32, 1.0f), 2.0f, kCellSize));
+  CHECK(v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize));
 
   // Corners clamp into range rather than indexing out of bounds.
   CHECK(v.cellIndexOf(Vec3{-1000, -1000, -1000}) == 0);
@@ -180,7 +180,7 @@ TEST(volume_coord_clamps_and_flattens_uniquely) {
 
 TEST(volume_point_in_cell_maps_back_to_that_cell) {
   SimVolume v;
-  CHECK(v.build(Geometry::cube(32, 1.0f), 2.0f, kCellSize));
+  CHECK(v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize));
   const Aabb b = v.box();
   const IVec3 d = v.dim();
   for (int z = 0; z < d.z; ++z)
