@@ -26,8 +26,14 @@ class Simulation {
   bool init(int mode, int particleCount, uint32_t seed);
   // Loads a scene preset: refills particles, sets the palette, installs heat emitters.
   bool initScene(int mode, int sceneId, uint32_t seed);
+  // Immediate: replaces the population in one go. Fine for a deliberate user action.
   void setScene(int sceneId);
+  // Gradual: drains the old materials and refills the new ones over a couple of seconds while
+  // crossfading the palette. Used by auto-cycle, where a hard reset reads as a glitch rather
+  // than as a change of scene.
+  void transitionToScene(int sceneId);
   int scene() const { return sceneId_; }
+  bool transitioning() const { return fade_ < 1.0f || !populationReached(); }
 
   // Drift between scenes on a timer, so the cube is an ambient object rather than something
   // that has to be operated.
@@ -93,6 +99,11 @@ class Simulation {
  private:
   void fixedStep(float dt);
   int fill(int count, uint8_t material, uint32_t seed);
+  void applySceneTargets(int sceneId);
+  void advanceTransition(float dt);
+  void countMaterials(int& water, int& sand) const;
+  bool populationReached() const;
+  void spawnOne(uint8_t material);
 
   Geometry geometry_;
   SimVolume volume_;
@@ -106,6 +117,11 @@ class Simulation {
   Emitter emitters_[kMaxEmitters];
   int emitterCount_ = 0;
   int sceneId_ = 0;
+  int targetWater_ = 0;
+  int targetSand_ = 0;
+  const Palette* fadeFrom_ = nullptr;
+  const Palette* fadeTo_ = nullptr;
+  float fade_ = 1.0f;  // 1 == not fading
   bool autoCycle_ = false;
   float cycleClock_ = 0.0f;
   Rng rng_{0x5EEDu};  // field flicker; seeded, never clock-based

@@ -233,3 +233,87 @@ TEST(scene_auto_cycle_off_by_default) {
   for (int s = 0; s < 2000; ++s) g_sim.advance(kFixedDt);
   CHECK(g_sim.scene() == 0);  // stays put
 }
+
+TEST(scene_transition_drains_and_refills_gradually) {
+  // Auto-cycle must not hard-reset the population: a tank that vanishes and reappears in one
+  // frame reads as a glitch rather than as a change of scene.
+  CHECK(g_sim.initScene(Simulation::kCube, 0, 4));  // water tank
+  const int start = g_sim.particleCount();
+  CHECK(start > 1000);
+
+  g_sim.transitionToScene(1);  // campfire: no particles at all
+  CHECK(g_sim.transitioning());
+  // One step must not empty it.
+  g_sim.stepFixed();
+  CHECK(g_sim.particleCount() > start - 200);
+  CHECK(g_sim.particleCount() < start);  // but it is draining
+
+  // It does get there, over a second or two rather than instantly.
+  int steps = 0;
+  while (g_sim.particleCount() > 0 && steps++ < 2000) g_sim.stepFixed();
+  CHECK(g_sim.particleCount() == 0);
+  CHECK(steps > 30);  // gradual, not a reset
+  std::printf("       drained %d particles over %d steps (%.1f s)\n", start, steps,
+              (float)steps * kFixedDt);
+
+  // And back the other way: refilling is gradual too.
+  g_sim.transitionToScene(0);
+  g_sim.stepFixed();
+  const int afterOne = g_sim.particleCount();
+  CHECK(afterOne > 0);
+  CHECK(afterOne < 200);
+  steps = 0;
+  while (g_sim.transitioning() && steps++ < 4000) g_sim.stepFixed();
+  CHECK(g_sim.particleCount() > 1000);
+}
+
+TEST(scene_transition_crossfades_the_palette) {
+  // Palette 0 -> 1 must pass through intermediate colours rather than snapping.
+  CHECK(g_sim.initScene(Simulation::kCube, 0, 6));  // naturalistic
+  for (int i = 0; i < 200; ++i) g_sim.stepFixed();
+  g_sim.render();
+
+  // Sample the brightest texel on the floor before, mid-fade and after.
+  auto floorPeak = [&]() {
+    const uint8_t* px = g_sim.renderer().panelPixels(4);
+    int best = -1, bi = 0;
+    for (int i = 0; i < 32 * 32; ++i) {
+      const int lum = px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2];
+      if (lum > best) { best = lum; bi = i; }
+    }
+    return Vec3{(float)px[bi * 4], (float)px[bi * 4 + 1], (float)px[bi * 4 + 2]};
+  };
+  const Vec3 before = floorPeak();
+
+  g_sim.transitionToScene(5);  // neon tank
+  for (int i = 0; i < 20; ++i) g_sim.stepFixed();  // ~0.33s into a 1.6s fade
+  g_sim.render();
+  const Vec3 mid = floorPeak();
+
+  for (int i = 0; i < 200; ++i) g_sim.stepFixed();
+  g_sim.render();
+  const Vec3 after = floorPeak();
+
+  std::printf("       peak rgb %.0f,%.0f,%.0f -> %.0f,%.0f,%.0f -> %.0f,%.0f,%.0f\n",
+              before.x, before.y, before.z, mid.x, mid.y, mid.z, after.x, after.y, after.z);
+  // Mid-fade must differ from both ends: it is a blend, not a switch.
+  CHECK(length(mid - before) > 2.0f);
+  CHECK(length(mid - after) > 2.0f);
+}
+
+TEST(scene_transition_respects_capacity) {
+  // Draining before refilling matters: a scene that swaps one material for another must not
+  // briefly exceed capacity and over-compress.
+  CHECK(g_sim.initScene(Simulation::kCube, 0, 8));  // water only
+  g_sim.transitionToScene(2);                       // sand only
+  int steps = 0;
+  while (g_sim.transitioning() && steps++ < 4000) {
+    g_sim.stepFixed();
+    CHECK(g_sim.particleCount() <= g_sim.capacity());
+  }
+  int water = 0, sand = 0;
+  for (int i = 0; i < g_sim.particles().n; ++i)
+    (g_sim.particles().mat[i] == kSand ? sand : water)++;
+  CHECK(sand > 0);
+  CHECK(water == 0);
+}

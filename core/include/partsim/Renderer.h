@@ -24,8 +24,16 @@ namespace partsim {
 class Renderer {
  public:
   void init(const Geometry& g);
-  void setPalette(const Palette* p) { palette_ = p; }
+  void setPalette(const Palette* p) { palette_ = p; paletteB_ = nullptr; blend_ = 0.0f; }
   const Palette& palette() const { return *palette_; }
+
+  // Crossfade between two palettes. t = 0 is all `a`, t = 1 all `b`. Costs a second ramp lookup
+  // per lit texel, and only while a fade is actually running.
+  void setPaletteBlend(const Palette* a, const Palette* b, float t) {
+    palette_ = a;
+    paletteB_ = (b == a) ? nullptr : b;
+    blend_ = pclamp(t, 0.0f, 1.0f);
+  }
 
   // Brightness scale: accumulated intensity that maps to the top of the ramp. Lower makes
   // the fluid glow harder.
@@ -64,6 +72,8 @@ class Renderer {
   static constexpr int kKernelSize = 64;
 
   const Palette* palette_ = nullptr;
+  const Palette* paletteB_ = nullptr;  // crossfade target, null when not fading
+  float blend_ = 0.0f;
   int panels_ = 0;
   int texels_[kMaxPanels] = {0};
   float fullScale_ = 900.0f;

@@ -8,6 +8,7 @@ add_executable(partsim_tests
   test_simulation.cpp
   test_sand.cpp
   test_field.cpp
+  test_noalloc.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

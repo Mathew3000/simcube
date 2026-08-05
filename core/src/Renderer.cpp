@@ -121,6 +121,18 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
   const int n = texels_[panel];
   const Palette& pal = *palette_;
   const float toLevel = 255.0f / fullScale_;
+  const bool fading = paletteB_ != nullptr && blend_ > 0.0f;
+  const int wB = (int)(blend_ * 256.0f), wA = 256 - wB;
+
+  // One lookup when not fading, two and a lerp while a scene transition is in flight.
+  auto ramp = [&](const Ramp& a, const Ramp& b, int level, uint8_t out[3]) {
+    rampLookup(a, level, out);
+    if (!fading) return;
+    uint8_t o2[3];
+    rampLookup(b, level, o2);
+    for (int c = 0; c < 3; ++c)
+      out[c] = (uint8_t)(((int)out[c] * wA + (int)o2[c] * wB) >> 8);
+  };
 
   for (int i = 0; i < n; ++i) {
     const uint16_t aw = src[i * kChannelCount + kChWater];
@@ -129,16 +141,17 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
 
     int r = 0, gg = 0, b = 0;
     uint8_t c[3];
+    const Palette& palB = fading ? *paletteB_ : pal;
     if (aw) {
-      rampLookup(pal.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
+      ramp(pal.water, palB.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
     if (as) {
-      rampLookup(pal.sand, iclamp((int)((float)as * toLevel), 0, 255), c);
+      ramp(pal.sand, palB.sand, iclamp((int)((float)as * toLevel), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
     if (ah) {
-      rampLookup(pal.heat, iclamp((int)((float)ah * (255.0f / kHeatGain)), 0, 255), c);
+      ramp(pal.heat, palB.heat, iclamp((int)((float)ah * (255.0f / kHeatGain)), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
 

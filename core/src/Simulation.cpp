@@ -8,6 +8,12 @@ constexpr int kPanelRes = 32;
 // impulse with follow-through instead of a single-frame jolt.
 constexpr float kJerkDecay = 0.85f;
 
+// Scene transition pacing. The palette crossfade and the drain/refill run concurrently.
+constexpr float kFadeSeconds = 1.6f;
+// Particles added or removed per physics step. At 60Hz this drains 3000 particles in about a
+// second and a half, which reads as the tank emptying rather than as a glitch.
+constexpr int kPopulationRate = 32;
+
 }  // namespace
 
 bool Simulation::init(int mode, int particleCount, uint32_t seed) {
@@ -35,6 +41,11 @@ bool Simulation::init(int mode, int particleCount, uint32_t seed) {
   // leaks between runs and a scene drifts when nobody asked it to.
   autoCycle_ = false;
   cycleClock_ = 0.0f;
+  fade_ = 1.0f;
+  // The targets must match what was just filled, or the transition logic sees a population it
+  // did not ask for and immediately drains the whole tank.
+  targetWater_ = particles_.n;
+  targetSand_ = 0;
   rng_.reseed(seed ^ 0x5EEDu);
   stats.particles = particles_.n;
   stats.substeps = 0;
@@ -47,27 +58,102 @@ bool Simulation::initScene(int mode, int sceneId, uint32_t seed) {
   return true;
 }
 
-void Simulation::setScene(int sceneId) {
-  const SceneDesc& sc = sceneAt(sceneId);
+void Simulation::applySceneTargets(int sceneId) {
   sceneId_ = sceneId < 0 ? 0 : (sceneId >= sceneCount() ? sceneCount() - 1 : sceneId);
+  const SceneDesc& sc = sceneAt(sceneId_);
 
   // A slab tolerates a far smaller share of its nominal capacity than a cube does; overfilling
   // leaves the fluid permanently over-compressed and it never settles.
   const int ceiling = (geometry_.count() == 1) ? capacity() / 4 : (capacity() * 9) / 10;
+  targetSand_ = imin(sc.sandCount, ceiling);
+  targetWater_ = imin(sc.waterCount, ceiling - targetSand_);
+  if (targetWater_ < 0) targetWater_ = 0;
+
+  emitterCount_ = imin(sc.emitterCount, kMaxEmitters);
+  for (int i = 0; i < emitterCount_; ++i) emitters_[i] = sc.emitters[i];
+  cycleClock_ = 0.0f;
+}
+
+void Simulation::setScene(int sceneId) {
+  const int prevPalette = sceneAt(sceneId_).paletteIndex;
+  (void)prevPalette;
+  applySceneTargets(sceneId);
 
   particles_.clear();
   field_.clear();
   // Sand first so it starts at the bottom, which is where it ends up anyway -- starting it on
   // top just means watching it sink for several seconds before the scene looks right.
-  if (sc.sandCount > 0) fill(imin(sc.sandCount, ceiling), kSand, 0xA5A5u + (uint32_t)sceneId_);
-  if (sc.waterCount > 0)
-    fill(imin(particles_.n + sc.waterCount, ceiling), kWater, 0xC3C3u + (uint32_t)sceneId_);
+  if (targetSand_ > 0) fill(targetSand_, kSand, 0xA5A5u + (uint32_t)sceneId_);
+  if (targetWater_ > 0)
+    fill(particles_.n + targetWater_, kWater, 0xC3C3u + (uint32_t)sceneId_);
 
-  emitterCount_ = imin(sc.emitterCount, kMaxEmitters);
-  for (int i = 0; i < emitterCount_; ++i) emitters_[i] = sc.emitters[i];
+  fade_ = 1.0f;
+  fadeFrom_ = fadeTo_ = &paletteAt(sceneAt(sceneId_).paletteIndex);
+  renderer_.setPalette(fadeTo_);
+  stats.particles = particles_.n;
+}
 
-  renderer_.setPalette(&paletteAt(sc.paletteIndex));
-  cycleClock_ = 0.0f;
+void Simulation::transitionToScene(int sceneId) {
+  fadeFrom_ = &paletteAt(sceneAt(sceneId_).paletteIndex);
+  applySceneTargets(sceneId);
+  fadeTo_ = &paletteAt(sceneAt(sceneId_).paletteIndex);
+  fade_ = 0.0f;
+  renderer_.setPaletteBlend(fadeFrom_, fadeTo_, 0.0f);
+  // Emitters switch immediately, so a new fire lights while the old fluid is still draining.
+  // Waiting until the drain finished would leave a visibly dead pause mid-transition.
+}
+
+void Simulation::countMaterials(int& water, int& sand) const {
+  water = 0;
+  sand = 0;
+  for (int i = 0; i < particles_.n; ++i) (particles_.mat[i] == kSand ? sand : water)++;
+}
+
+bool Simulation::populationReached() const {
+  int water = 0, sand = 0;
+  countMaterials(water, sand);
+  return water == targetWater_ && sand == targetSand_;
+}
+
+void Simulation::spawnOne(uint8_t material) {
+  // Enters near the top so it falls in, rather than materialising inside the settled body where
+  // it would be instantly over-dense and get flung out.
+  const Aabb& b = volume_.box();
+  const Vec3 s = b.size();
+  const float m = kRestSpacing;
+  particles_.add(Vec3{b.lo.x + m + rng_.nextFloat() * (s.x - 2.0f * m),
+                      b.hi.y - m - rng_.nextFloat() * m,
+                      b.lo.z + m + rng_.nextFloat() * (s.z - 2.0f * m)},
+                 Vec3{0.0f, 0.0f, 0.0f}, material);
+}
+
+void Simulation::advanceTransition(float dt) {
+  if (fade_ < 1.0f) {
+    fade_ = pmin(1.0f, fade_ + dt / kFadeSeconds);
+    renderer_.setPaletteBlend(fadeFrom_, fadeTo_, fade_);
+    if (fade_ >= 1.0f) renderer_.setPalette(fadeTo_);
+  }
+
+  int water = 0, sand = 0;
+  countMaterials(water, sand);
+  int budget = kPopulationRate;
+
+  // Drain first, so a scene that swaps one material for another does not briefly exceed capacity.
+  while (budget > 0 && (water > targetWater_ || sand > targetSand_)) {
+    const uint8_t victim = (sand > targetSand_) ? (uint8_t)kSand : (uint8_t)kWater;
+    int found = -1;
+    for (int i = particles_.n - 1; i >= 0; --i)
+      if (particles_.mat[i] == victim) { found = i; break; }
+    if (found < 0) break;
+    particles_.removeAt(found);
+    (victim == kSand ? sand : water)--;
+    --budget;
+  }
+  while (budget > 0 && (water < targetWater_ || sand < targetSand_)) {
+    if (sand < targetSand_) { spawnOne(kSand); ++sand; }
+    else { spawnOne(kWater); ++water; }
+    --budget;
+  }
   stats.particles = particles_.n;
 }
 
@@ -97,6 +183,8 @@ void Simulation::setOrientation(Quat q) {
 void Simulation::fixedStep(float dt) {
   // Container acceleration is indistinguishable from gravity in the opposite direction, so a
   // shake is one vector subtraction rather than a separate force path.
+  if (fade_ < 1.0f || !populationReached()) advanceTransition(dt);
+
   const Vec3 effective = gravity_ - jerk_;
   solver_.step(particles_, volume_, hash_, scratch_, defaultMaterials(), effective, dt);
   // Heat uses the same object-space gravity, so flames lean when the cube is tilted and get
@@ -125,7 +213,7 @@ int Simulation::advance(float wallDt) {
   if (autoCycle_ && n > 0) {
     cycleClock_ += (float)n * kFixedDt;
     if (cycleClock_ >= sceneAt(sceneId_).dwellSeconds)
-      setScene((sceneId_ + 1) % sceneCount());
+      transitionToScene((sceneId_ + 1) % sceneCount());
   }
 
   stats.substeps = n;

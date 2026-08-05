@@ -49,6 +49,18 @@ struct Particles {
     return true;
   }
 
+  // Swap-with-last removal. Order is arbitrary anyway -- the neighbour grid permutes the arrays
+  // every step -- so this is O(1) rather than a shift.
+  void removeAt(int i) {
+    const int last = --n;
+    if (i == last) return;
+    x[i] = x[last]; y[i] = y[last]; z[i] = z[last];
+    vx[i] = vx[last]; vy[i] = vy[last]; vz[i] = vz[last];
+    sx[i] = sx[last]; sy[i] = sy[last]; sz[i] = sz[last];
+    lam[i] = lam[last];
+    mat[i] = mat[last];
+  }
+
   Vec3 pos(int i) const { return Vec3{x[i], y[i], z[i]}; }
   Vec3 vel(int i) const { return Vec3{vx[i], vy[i], vz[i]}; }
   Vec3 pred(int i) const { return Vec3{sx[i], sy[i], sz[i]}; }

@@ -20,7 +20,7 @@ implementation, three build targets — what you see in the browser is what the 
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
-| `platform/host/` — tests, benchmark, image dump | **working**, 87 test cases green |
+| `platform/host/` — tests, benchmark, image dump | **working**, 93 test cases green |
 | `platform/wasm/` — WASM module + three.js cube | **working**, verified bit-identical to host |
 | `platform/esp32/` — PlatformIO firmware | not written yet |
 
@@ -76,7 +76,7 @@ Expect four ctest entries to pass:
 
 | test | what it checks |
 |---|---|
-| `unit` | 66 cases, ~9 s |
+| `unit` | 93 cases, ~20 s |
 | `no_libm` | `core/` calls no nondeterministic libm (see below) |
 | `wasm_determinism` | WASM output is bit-identical to host — **skips loudly** if the WASM build is absent |
 | `golden_hash_current` | `scripts/golden_hash.txt` is not a stale reference |
@@ -340,7 +340,14 @@ Three materials share one solver and one renderer:
 
 Scenes are `const` C++ tables in `core/src/ScenePresets.cpp` (flash rodata on the ESP32, zero
 parsing): water tank, campfire, sand pile, water and sand, kettle, neon tank, twin flames. Each
-declares its materials, palette, heat emitters and auto-cycle dwell time. Palettes are ramp
+declares its materials, palette, heat emitters and auto-cycle dwell time.
+
+Switching has two modes. `setScene` replaces the population immediately, which is right for a
+deliberate click. `transitionToScene` — what auto-cycle uses — drains the old materials and
+refills the new ones at 32 particles per step (~1.6 s for a full tank) while crossfading the
+palette, because a tank that vanishes and reappears in one frame reads as a glitch rather than as
+a change of scene. It drains before refilling, so swapping one material for another never briefly
+exceeds capacity. Palettes are ramp
 tables in `PaletteData.cpp`; the splat loop only ever accumulates per-material *intensity*, and
 colour is applied once at resolve time — which is what makes both data-driven.
 
@@ -357,9 +364,12 @@ code path with no special cases.
 volume is their bounding box. A cube gives 32³. A single panel gives a thin slab, so
 single-panel mode runs the *same* 3D solver rather than a second 2D one.
 
-**No allocation after init.** Every pool is fixed-capacity static storage, because the ESP32
-has ~230 KB of internal SRAM and no room for surprises. `Particles` is ~700 KB at the host
-capacity, so it must live in static or heap storage — never on the stack.
+**No allocation after init.** Every pool is fixed-capacity static storage, because the ESP32 has
+~230 KB of internal SRAM and no room for surprises. `Particles` is ~700 KB at the host capacity,
+so it must live in static or heap storage — never on the stack. This is **enforced**, not just
+intended: `test_noalloc.cpp` replaces global `operator new` with a trap and arms it around the
+step, render, scene-switch and auto-cycle paths. Measured result is zero allocations, even during
+init.
 
 **Determinism is a feature, not an accident.** Fixed timestep, seeded xoshiro128** (never
 clock-seeded), `-ffp-contract=off` everywhere, no `-ffast-math`, and no libm. Host and browser
