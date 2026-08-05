@@ -178,6 +178,55 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
 
     p.setPred(i, clampToBox(pi + dp, b));
   }
+
+  // --- pass D: granular friction ------------------------------------------
+  // Position-based friction, after Macklin's unified particle physics: damp the TANGENTIAL
+  // component of each contact pair's relative displacement over this step. Without it a
+  // granular material is just a heavy liquid and spreads perfectly flat; with it a pile holds
+  // an angle of repose.
+  //
+  // Both the displacement and the predicted position are available here (pos is still the
+  // start-of-step value), so no extra state is needed. Frictionless materials skip the pass
+  // entirely, so water pays nothing for sand existing.
+  // Coulomb-bounded, which is what makes it stable. Each pair's friction correction is capped
+  // at mu * overlap, so it can never exceed how hard the contact is actually pressed together.
+  // Simply cancelling the tangential displacement instead (unbounded) is stable only for
+  // mu <= 1, where it barely affects the pile at all, and injects energy above that.
+  const float contactR = kRestSpacing;
+  for (int i = 0; i < n; ++i) {
+    const float mu = mats[p.mat[i]].friction;
+    if (mu <= 0.0f) continue;
+
+    const Vec3 posI = p.pos(i);
+
+    // Contacts are projected SEQUENTIALLY, each applied to pred before the next is read, the
+    // way Macklin's solver does it. Accumulating bounded per-pair corrections and adding them
+    // at the end over-corrects by roughly the neighbour count (~25x) and blows up; averaging
+    // them instead mostly cancels, because neighbours slide in opposing directions, and the
+    // pile then spreads flat. Sequential projection is both stable and effective.
+    forEachNeighbour(v, h, posI, [&](int j) {
+      if (j == i) return;
+      const Vec3 pi = p.pred(i);  // re-read: earlier contacts have already moved it
+      const Vec3 rv = pi - p.pred(j);
+      const float r2 = length2(rv);
+      if (r2 >= contactR * contactR || r2 < 1e-8f) return;  // touching only
+
+      const float r = psqrt(r2);
+      const float overlap = contactR - r;  // > 0 here
+      const Vec3 nHat = rv * (1.0f / r);
+      const Vec3 rel = (pi - posI) - (p.pred(j) - p.pos(j));
+      const Vec3 tang = rel - nHat * dot(rel, nHat);
+      const float tl = length(tang);
+      if (tl < 1e-7f) return;
+
+      // Coulomb: the correction can never exceed mu * overlap, so friction is bounded by how
+      // hard the contact is actually pressed together. Static below that limit (cancel the
+      // slide), kinetic at it. Half each, since j runs its own pass.
+      const float limit = mu * overlap;
+      const float scale = (tl <= limit) ? 1.0f : (limit / tl);
+      p.setPred(i, clampToBox(pi - tang * (0.5f * scale), b));
+    });
+  }
 }
 
 void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratch,
@@ -206,11 +255,14 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
 
   // --- velocity from the corrected positions -------------------------------
   const float invDt = 1.0f / dt;
-  const float sleep2 = kSleepSpeed * kSleepSpeed;
   for (int i = 0; i < n; ++i) {
     const Vec3 pos = p.pos(i), pred = p.pred(i);
     Vec3 nv = (pred - pos) * (invDt * damping_);
-    if (length2(nv) < sleep2) nv = Vec3{0.0f, 0.0f, 0.0f};
+    // Static-friction deadband. A material may raise it above the global floor: without a
+    // generous deadband a sand pile creeps indefinitely and slowly flattens, which reads as
+    // the sand melting.
+    const float sleep = pmax(kSleepSpeed, mats[p.mat[i]].staticVelocity);
+    if (length2(nv) < sleep * sleep) nv = Vec3{0.0f, 0.0f, 0.0f};
     p.setVel(i, nv);
     p.setPos(i, pred);
   }
