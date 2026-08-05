@@ -18,6 +18,7 @@ Particles g_p;
 SpatialHash g_h;
 Solver g_solver;
 Renderer g_renderer;
+FieldGrid g_noFire;  // no fire in these scenes; splatField exits immediately
 float g_scratch[kMaxParticles];
 
 const char* faceName(int i) {
@@ -227,7 +228,7 @@ void hydrostatic(int count, int steps, int iters, float damping, float eps, int 
   double renderMs = 0.0;
   for (int i = 0; i < 50; ++i) {
     const auto t0 = std::chrono::steady_clock::now();
-    g_renderer.render(g_p, g);
+    g_renderer.render(g_p, g_noFire, g);
     renderMs += std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
   }

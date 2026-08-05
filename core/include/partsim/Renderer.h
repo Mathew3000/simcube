@@ -1,4 +1,5 @@
 #pragma once
+#include "partsim/FieldGrid.h"
 #include "partsim/Palette.h"
 #include "partsim/Particles.h"
 #include "partsim/Geometry.h"
@@ -30,11 +31,14 @@ class Renderer {
   // the fluid glow harder.
   void setExposure(float fullScale) { fullScale_ = pmax(1.0f, fullScale); }
 
-  // clear -> splat -> resolve every panel into the internal RGBA buffers.
-  void render(const Particles& p, const Geometry& g);
+  // clear -> splat particles -> splat heat -> resolve every panel into the RGBA buffers.
+  void render(const Particles& p, const FieldGrid& f, const Geometry& g);
 
   void clear();
   void splat(const Particles& p, const Geometry& g);
+  // Heat cells splat through the SAME path as particles, into the heat channel, so flame and
+  // fluid composite consistently and the palette stays the only place colour is decided.
+  void splatField(const FieldGrid& f, const Geometry& g);
   // bytesPerTexel: 3 for tight RGB (LED panels), 4 for RGBA (WebGL wants alignment 4).
   void resolve(int panel, uint8_t* out, int bytesPerTexel) const;
 
@@ -61,8 +65,10 @@ class Renderer {
   // distance from the panel. Both are LUTs so the inner loop has no divides, no sqrt and no
   // transcendentals -- which is what keeps this affordable at 240MHz.
   uint8_t atten_[kAttenSize + 1];
+  uint8_t heatAtten_[kAttenSize + 1];  // separate, far longer reach; see kHeatInfluence
   uint8_t kernel_[kKernelSize + 1];
   float attenScale_ = 1.0f;
+  float heatAttenScale_ = 1.0f;
   float kernelScale_ = 1.0f;
 
   uint16_t accum_[kMaxPanels][kMaxPanelTexels * kChannelCount];

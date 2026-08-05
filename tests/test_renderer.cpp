@@ -7,6 +7,7 @@ namespace {
 
 // ~330KB of buffers; far too big for the stack.
 Renderer g_r;
+FieldGrid g_noFire;  // no fire in these scenes; splatField exits immediately
 Particles g_p;
 
 // Peak-intensity texel on a panel, for the given channel.
@@ -161,7 +162,7 @@ TEST(renderer_clear_and_empty_scene_are_black) {
   const Geometry g = Geometry::cube(32, 1.0f);
   g_r.init(g);
   g_p.clear();
-  g_r.render(g_p, g);
+  g_r.render(g_p, g_noFire, g);
   for (int k = 0; k < g.count(); ++k) {
     const uint8_t* px = g_r.panelPixels(k);
     for (int i = 0; i < 32 * 32; ++i) {
@@ -213,7 +214,7 @@ TEST(renderer_exposure_controls_brightness_without_clipping_to_white) {
   for (int pass = 0; pass < 2; ++pass) {
     g_r.setExposure(pass == 0 ? 600.0f : 6000.0f);
     g_r.init(g);
-    g_r.render(g_p, g);
+    g_r.render(g_p, g_noFire, g);
     const uint8_t* px = g_r.panelPixels(4);
     double sum = 0.0;
     for (int i = 0; i < 32 * 32; ++i)

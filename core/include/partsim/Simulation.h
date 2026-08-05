@@ -1,5 +1,6 @@
 #pragma once
 #include "partsim/Renderer.h"
+#include "partsim/Scene.h"
 #include "partsim/Rng.h"
 #include "partsim/Solver.h"
 
@@ -23,6 +24,15 @@ class Simulation {
   enum Mode : int { kCube = 0, kSinglePanel = 1 };
 
   bool init(int mode, int particleCount, uint32_t seed);
+  // Loads a scene preset: refills particles, sets the palette, installs heat emitters.
+  bool initScene(int mode, int sceneId, uint32_t seed);
+  void setScene(int sceneId);
+  int scene() const { return sceneId_; }
+
+  // Drift between scenes on a timer, so the cube is an ambient object rather than something
+  // that has to be operated.
+  void setAutoCycle(bool on) { autoCycle_ = on; cycleClock_ = 0.0f; }
+  bool autoCycle() const { return autoCycle_; }
 
   // World-space down, rotated into object space by the object's orientation.
   void setOrientation(Quat q);
@@ -48,7 +58,9 @@ class Simulation {
   // Exactly one physics step, for tests and the golden sequence.
   void stepFixed() { fixedStep(kFixedDt); }
 
-  void render() { renderer_.render(particles_, geometry_); }
+  void render() { renderer_.render(particles_, field_, geometry_); }
+
+  const FieldGrid& field() const { return field_; }
 
   const Geometry& geometry() const { return geometry_; }
   const SimVolume& volume() const { return volume_; }
@@ -64,6 +76,8 @@ class Simulation {
   // FNV-1a over position and velocity, folded to 32 bits. The cross-target determinism
   // check compares this between the host and the WASM build.
   uint32_t stateHash() const;
+  // Same, over the heat field, so fire is covered by that check too.
+  uint32_t fieldHash() const;
 
   Stats stats{0.0f, 0.0f, 0, 0};
 
@@ -76,8 +90,16 @@ class Simulation {
   Particles particles_;
   SpatialHash hash_;
   Solver solver_;
+  FieldGrid field_;
   Renderer renderer_;
   float scratch_[kMaxParticles];
+
+  Emitter emitters_[kMaxEmitters];
+  int emitterCount_ = 0;
+  int sceneId_ = 0;
+  bool autoCycle_ = false;
+  float cycleClock_ = 0.0f;
+  Rng rng_{0x5EEDu};  // field flicker; seeded, never clock-based
 
   Vec3 gravity_{0.0f, -kGravityMag, 0.0f};
   Vec3 jerk_{0.0f, 0.0f, 0.0f};  // container acceleration; see addContainerAccel
@@ -85,12 +107,17 @@ class Simulation {
   float accumulator_ = 0.0f;
 };
 
-// A fixed scripted motion sequence, run identically on every target so the resulting state
-// hash can be compared bit-for-bit. Lives in core rather than in each test harness precisely
-// so the two harnesses cannot drift apart.
-uint32_t goldenHash(Simulation& sim, int steps, int particleCount, uint32_t seed);
-constexpr int kGoldenSteps = 600;
-constexpr int kGoldenParticles = 1200;
+// A fixed scripted motion sequence, run identically on every target so the resulting hash can
+// be compared bit-for-bit. Lives in core rather than in each test harness precisely so the two
+// harnesses cannot drift apart.
+//
+// Runs two scenes on purpose: water+sand first, then the kettle. A water-only sequence leaves
+// the friction pass and the whole heat field uncovered, so a divergence in either would pass
+// the check unnoticed.
+uint32_t goldenHash(Simulation& sim, int steps, uint32_t seed);
+constexpr int kGoldenSteps = 500;   // per scene
 constexpr uint32_t kGoldenSeed = 0xC0FFEEu;
+constexpr int kGoldenSceneA = 3;    // water and sand
+constexpr int kGoldenSceneB = 4;    // kettle: water over a burner
 
 }  // namespace partsim

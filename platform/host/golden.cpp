@@ -13,7 +13,7 @@ Simulation g_sim;  // ~1.2MB
 
 int main(int argc, char** argv) {
   const bool quiet = (argc > 1) && std::strcmp(argv[1], "-q") == 0;
-  const uint32_t state = goldenHash(g_sim, kGoldenSteps, kGoldenParticles, kGoldenSeed);
+  const uint32_t state = goldenHash(g_sim, kGoldenSteps, kGoldenSeed);
   g_sim.render();
   const uint32_t pixels = [] {
     uint64_t h = 1469598103934665603ull;
@@ -27,8 +27,9 @@ int main(int argc, char** argv) {
   if (quiet) {
     std::printf("%08x %08x\n", state, pixels);
   } else {
-    std::printf("golden steps=%d particles=%d seed=%08x\n", kGoldenSteps,
-                g_sim.particleCount(), kGoldenSeed);
+    std::printf("golden: scenes %d+%d, %d steps each, seed %08x, %d particles\n",
+                kGoldenSceneA, kGoldenSceneB, kGoldenSteps, kGoldenSeed,
+                g_sim.particleCount());
     std::printf("state  %08x\n", state);
     std::printf("pixels %08x\n", pixels);
   }

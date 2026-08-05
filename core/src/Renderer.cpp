@@ -32,6 +32,18 @@ void Renderer::init(const Geometry& g) {
   }
   atten_[kAttenSize] = 0;
 
+  // Heat's falloff is gentler as well as longer: squared would leave a plume crossing the
+  // middle of the box almost invisible on the side faces.
+  // Heat's falloff is gentler as well as longer-ranged: squared would leave a plume crossing
+  // the middle of the box nearly invisible on the side faces. This is between linear and
+  // squared, and still reaches exactly zero at kHeatInfluence so the support stays compact.
+  heatAttenScale_ = (float)kAttenSize / kHeatInfluence;
+  for (int q = 0; q <= kAttenSize; ++q) {
+    const float t = 1.0f - (float)q / (float)kAttenSize;
+    heatAtten_[q] = (uint8_t)(255.0f * t * (0.35f + 0.65f * t) + 0.5f);
+  }
+  heatAtten_[kAttenSize] = 0;
+
   // Radial kernel over squared distance in texels, out to the footprint edge. Gaussian-ish
   // but forced to zero at the rim so the footprint really is bounded.
   const float rMax = (float)kSplatFootprint + 0.5f;
@@ -125,7 +137,7 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
       r += c[0]; gg += c[1]; b += c[2];
     }
     if (ah) {
-      rampLookup(pal.heat, iclamp((int)((float)ah * toLevel), 0, 255), c);
+      rampLookup(pal.heat, iclamp((int)((float)ah * (255.0f / kHeatGain)), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
 
@@ -137,9 +149,61 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
   }
 }
 
-void Renderer::render(const Particles& p, const Geometry& g) {
+void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
+  if (f.empty()) return;  // nothing burning: whole pass skipped
+
+  const IVec3 d = f.dim();
+  for (int z = 0; z < d.z; ++z) {
+    for (int y = 0; y < d.y; ++y) {
+      for (int x = 0; x < d.x; ++x) {
+        const uint8_t heat = f.atCoord(x, y, z);
+        if (heat < kHeatFloor) continue;  // most of a cold volume exits here
+
+        const Vec3 q = f.cellCentre(x, y, z);
+        const float gain = (float)heat * (1.0f / 255.0f);
+
+        for (int k = 0; k < panels_; ++k) {
+          const Panel& pan = g.at(k);
+          const Vec3 dd = q - pan.origin;
+          const float dist = dot(dd, pan.n);
+          if (dist < 0.0f || dist >= kHeatInfluence) continue;
+
+          const float s = dot(dd, pan.u) * pan.invU2;
+          const float t = dot(dd, pan.v) * pan.invV2;
+          const int i0 = imax(0, (int)s - kSplatFootprint);
+          const int i1 = imin((int)pan.w - 1, (int)s + kSplatFootprint);
+          const int j0 = imax(0, (int)t - kSplatFootprint);
+          const int j1 = imin((int)pan.h - 1, (int)t + kSplatFootprint);
+          if (i0 > i1 || j0 > j1) continue;
+
+          const int a = heatAtten_[(int)(dist * heatAttenScale_)];
+          if (a == 0) continue;
+
+          uint16_t* dst = accum_[k];
+          const int w = (int)pan.w;
+          for (int j = j0; j <= j1; ++j) {
+            const float dy = ((float)j + 0.5f) - t;
+            const float dy2 = dy * dy;
+            for (int ii = i0; ii <= i1; ++ii) {
+              const float dx = ((float)ii + 0.5f) - s;
+              const int kq = (int)((dx * dx + dy2) * kernelScale_);
+              if (kq >= kKernelSize) continue;
+              const int contrib = (int)((float)((a * kernel_[kq]) >> 6) * gain);
+              if (contrib == 0) continue;
+              uint16_t& cell = dst[((j * w) + ii) * kChannelCount + kChHeat];
+              cell = satAdd(cell, contrib);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+void Renderer::render(const Particles& p, const FieldGrid& f, const Geometry& g) {
   clear();
   splat(p, g);
+  splatField(f, g);
   for (int k = 0; k < panels_; ++k) resolve(k, pixels_[k], 4);
 }
 

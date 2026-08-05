@@ -134,8 +134,8 @@ TEST(sim_state_hash_is_stable_and_sensitive) {
 TEST(sim_golden_sequence_is_reproducible) {
   // The reference the WASM build is compared against. If this is not reproducible on one
   // target it cannot possibly match across targets.
-  const uint32_t a = goldenHash(g_sim, kGoldenSteps, kGoldenParticles, kGoldenSeed);
-  const uint32_t b = goldenHash(g_sim, kGoldenSteps, kGoldenParticles, kGoldenSeed);
+  const uint32_t a = goldenHash(g_sim, kGoldenSteps, kGoldenSeed);
+  const uint32_t b = goldenHash(g_sim, kGoldenSteps, kGoldenSeed);
   CHECK(a == b);
   CHECK(a != 0u);
   std::printf("       golden state hash %08x\n", a);

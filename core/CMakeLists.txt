@@ -8,6 +8,8 @@ add_library(partsim_core STATIC
   src/Renderer.cpp
   src/PaletteData.cpp
   src/Simulation.cpp
+  src/FieldGrid.cpp
+  src/ScenePresets.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)

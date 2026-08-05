@@ -102,8 +102,8 @@ PS_EXPORT uint32_t ps_state_hash() { return g_ready ? g_sim.stateHash() : 0u; }
 
 // Runs the scripted golden sequence and returns the state hash. The host build runs the
 // identical core function, so a mismatch is a genuine cross-target divergence.
-PS_EXPORT uint32_t ps_golden_hash(int steps, int particleCount, uint32_t seed) {
-  const uint32_t h = goldenHash(g_sim, steps, particleCount, seed);
+PS_EXPORT uint32_t ps_golden_hash(int steps, uint32_t seed) {
+  const uint32_t h = goldenHash(g_sim, steps, seed);
   g_ready = true;
   return h;
 }

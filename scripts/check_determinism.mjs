@@ -15,9 +15,9 @@ const root = join(here, '..');
 const createPartsim = (await import(join(root, 'platform/wasm/web/public/partsim.mjs'))).default;
 const mod = await createPartsim();
 
-const STEPS = 600, PARTICLES = 1200, SEED = 0xc0ffee;
+const STEPS = 500, SEED = 0xc0ffee;  // must match kGoldenSteps / kGoldenSeed in core
 
-const state = mod._ps_golden_hash(STEPS, PARTICLES, SEED) >>> 0;
+const state = mod._ps_golden_hash(STEPS, SEED) >>> 0;
 mod._ps_render();
 const pixels = mod._ps_pixel_hash() >>> 0;
 const hex = (n) => n.toString(16).padStart(8, '0');

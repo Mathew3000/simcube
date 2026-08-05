@@ -26,6 +26,7 @@ constexpr int kMaxPanels = PARTSIM_MAX_PANELS;
 constexpr int kMaxPanelTexels = PARTSIM_MAX_PANEL_TEXELS;
 constexpr int kMaxGridCells = PARTSIM_MAX_GRID_CELLS;
 constexpr int kMaxFieldCells = PARTSIM_MAX_FIELD_CELLS;
+constexpr int kMaxEmitters = 4;
 
 // Particle indices are stored as uint16 in the sort/index arrays.
 static_assert(kMaxParticles <= 65535, "particle indices are uint16");
@@ -82,6 +83,11 @@ struct MaterialParams {
 
 // --- rendering -------------------------------------------------------------
 constexpr float kSplatInfluence = 8.0f;  // depth beyond which a particle lights nothing
+// Heat reaches much further than fluid, and has to: a plume in the middle of a 32-unit cube is
+// 16 units from every side face, so at the particle influence of 8 only the floor and ceiling
+// could see a campfire at all. Fire is emissive and glows through the volume, so a reach that
+// spans the box is both cheaper to justify and what actually looks right.
+constexpr float kHeatInfluence = 24.0f;
 constexpr int kSplatFootprint = 2;       // kernel half-width in texels
 constexpr int kAttenLutSize = 64;
 // Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
@@ -89,5 +95,11 @@ constexpr int kAttenLutSize = 64;
 // everything to white and throws the whole ramp away.
 constexpr float kSplatExposure = 7200.0f;
 enum Channel : uint8_t { kChWater = 0, kChSand = 1, kChHeat = 2, kChannelCount = 3 };
+// Heat is a field, not particles, so its accumulated intensity needs its own scale to land in
+// the same 0..kSplatExposure range the particle channels use.
+constexpr float kHeatGain = 5200.0f;
+// Field cells below this are not worth splatting; skipping them is most of the render cost of a
+// mostly-cold volume.
+constexpr uint8_t kHeatFloor = 6;
 
 }  // namespace partsim
