@@ -1,0 +1,12 @@
+build/
+build-*/
+.pio/
+node_modules/
+dist/
+out/
+*.ppm
+*.o
+*.a
+.DS_Store
+platform/wasm/web/public/partsim.mjs
+platform/wasm/web/public/partsim.wasm
