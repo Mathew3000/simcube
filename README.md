@@ -15,21 +15,26 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
-Milestone 1 is the browser cube. Steps 0–8 of 12 are done.
+**Milestone 1 is complete.** All 12 steps done; next is Milestone 2, the ESP32 firmware.
 
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
-| `platform/host/` — tests, benchmark, image dump | **working**, 66 test cases green |
+| `platform/host/` — tests, benchmark, image dump | **working**, 87 test cases green |
 | `platform/wasm/` — WASM module + three.js cube | **working**, verified bit-identical to host |
 | `platform/esp32/` — PlatformIO firmware | not written yet |
 
-Working today: water settles correctly in a 32³ cube under gravity from any direction, survives
-violent shaking without leaking, and runs live as a three.js cube in the browser that you tilt
-with the mouse to make it slosh. Cross-target determinism is **verified**, not just intended:
-the WASM build produces bit-identical particle state and pixels to the native build, and runs
-within 5% of native speed. Not yet: sand behaviour, fire/smoke, bloom, scene presets, and the
-ESP32 firmware.
+Working today: water, sand and fire in a 32³ cube, with seven scene presets, two palettes,
+optional auto-cycle, and bloom — running live as a three.js cube in the browser that you tilt
+with the mouse to make it slosh. Water settles correctly under gravity from any direction and
+survives violent shaking without leaking; sand heaps and sinks through water; flames lean when
+the cube is tilted and get pushed around when it is shaken.
+
+Cross-target determinism is **verified**, not just intended: the WASM build produces
+bit-identical particle state and pixels to the native build across water, sand *and* fire, and
+runs within 5% of native speed.
+
+Not yet: the ESP32 firmware (Milestone 2).
 
 ---
 
@@ -195,12 +200,12 @@ or GL anywhere in the loop.
 
 ```sh
 mkdir -p out
-./build/platform/host/partsim_ppm 3000        # scenes at the default exposure
-./build/platform/host/partsim_ppm 3000 exp    # sweep exposure instead
+./build/platform/host/partsim_ppm        # every scene, 400 steps each
+./build/platform/host/partsim_ppm 800    # settle longer
 ```
 
-Writes `out/net_<scene>.ppm` (the unfolded net) and `out/<scene>_<n>_<face>.ppm` per face.
-Scenes are `settled`, `tilted`, `falling`, `half` and `neon`.
+Writes `out/net_<scene>.ppm` (the unfolded net) and `out/<scene>_<n>_<face>.ppm` per face, for
+every scene in the table plus tilted variants of the water tank and the campfire.
 
 The net is laid out as the standard cross, so the horizontal strip reads as a continuous walk
 around the cube's sides — **a waterline that jumps at a seam means the panel mapping is
@@ -212,8 +217,10 @@ wrong**:
        [-Y]
 ```
 
-The `tilted` scene is the useful one: gravity at an angle should produce a straight slanted
-waterline that stays continuous across all four side faces.
+The tilted variants are the useful ones. `net_0_water_tank_tilt35` should show a straight
+slanted waterline continuous across all four side faces; `net_1_campfire_tilt35` should show the
+flame *leaning*, which is the check that heat uses the same object-space gravity the solver
+does.
 
 If your viewer does not open PPM, any of these work:
 
@@ -244,12 +251,16 @@ A server is required — ES modules and WASM cannot load from `file://`. There a
 | `/panels.html` | the six panels as flat 2D canvases in the same unfolded-net layout as `partsim_ppm`. Validates the C ABI and zero-copy views with no 3D involved, so a bug can be localised. |
 | `/orient.html` | panel orientation checker — see below. |
 
+Controls on the main page: a scene dropdown, `palette` to cycle colour ramps, `auto-cycle` to
+drift between scenes on a timer, `bloom` to toggle the glow, and `reset`.
+
 three.js r170 is **vendored** in `platform/wasm/web/vendor/`, not installed via npm, so the repo
 stays dependency-free and needs no bundler. See `vendor/README.md` for the versions and how to
 upgrade.
 
-Useful query parameters, both there so headless screenshots can verify things a level tank
-cannot: `/?tilt=35` pre-rotates the cube, and `/orient.html?cam=x,y,z` moves the camera.
+Useful query parameters, there so headless screenshots can verify things a level tank cannot:
+`/?tilt=35` pre-rotates the cube, `/?scene=6` selects a preset, and `/orient.html?cam=x,y,z`
+moves the camera.
 
 ### Checking panel orientation
 
@@ -316,6 +327,25 @@ cmake -B build -DPARTSIM_MAX_PARTICLES=3000 -DPARTSIM_MAX_GRID_CELLS=2048
 
 ---
 
+## Materials and scenes
+
+Three materials share one solver and one renderer:
+
+- **Water** — PBF particles. Its free surface is the whole point, so it gets the expensive path.
+- **Sand** — the same particles with twice the rest density and Coulomb friction on contacts.
+  Sinking through water falls out of the density constraint rather than being scripted.
+- **Fire/smoke** — a coarse `uint8` field, *not* particles. Fire has no surface and no
+  incompressibility, so PBF buys nothing for it, while a buoyant scalar field is a few KB and one
+  semi-Lagrangian pass against ~5500 cycles per particle.
+
+Scenes are `const` C++ tables in `core/src/ScenePresets.cpp` (flash rodata on the ESP32, zero
+parsing): water tank, campfire, sand pile, water and sand, kettle, neon tank, twin flames. Each
+declares its materials, palette, heat emitters and auto-cycle dwell time. Palettes are ramp
+tables in `PaletteData.cpp`; the splat loop only ever accumulates per-material *intensity*, and
+colour is applied once at resolve time — which is what makes both data-driven.
+
+---
+
 ## Design notes worth knowing before you touch the code
 
 **Everything is object space.** Gravity arrives at the core *already expressed in the
@@ -361,6 +391,18 @@ particles — within 5%. The browser is a fair preview of the physics, not a slo
 panels is 3–4% of one solver step. Contrary to expectation the renderer is not the
 bottleneck, so optimisation effort belongs in the neighbour search.
 
+**Physics rate is not free to lower.** Measured over identical simulated time, only the rate
+changing: 60 Hz settles to mean speed 0.000 at density 1.012; 40 Hz gives 0.857; 30 Hz gives
+1.314; 20 Hz gives **2.604 at density 1.074** — never settles, and past the ~5% over-compression
+where churning starts. The original plan assumed 20 Hz physics would buy 1.5× the particles for
+free; it does not. Render interpolation was built instead as a rate-independent feature
+(`Renderer::setTimeOffset` advances the splat along each particle's velocity by the accumulator's
+unconsumed time), so the display can outrun the physics at whatever rate the hardware can afford.
+
+**Fire needs its own, much longer splat reach.** A plume in the middle of a 32-unit cube sits 16
+units from every side face, so at the particle influence of 8 only the floor and ceiling lit up
+at all. Fire is emissive and glows through the volume; `kHeatInfluence` spans the box.
+
 **Two iterations, not more.** 2 solver iterations settle *better* than 3 or 6 (mean speed
 0.03 vs 0.30 at 3000 particles) and cost 28% less. More is not better here.
 
@@ -388,5 +430,12 @@ before suspecting convergence.
 - **Water climbs the vertical edges a little.** The wall-density term sums one axis at a
   time, so a corner double-counts the hidden region and the solver pushes fluid out of it.
   The fix is a product of per-axis visible fractions rather than a sum.
+- **Sand's angle of repose is shallower than reality.** It heaps and holds (peak 5.6 vs water's
+  2.6 for the same deposition) but the implied slope is ~20–25° rather than the 30–35° of real
+  sand. At 32³ with ~1.2-unit grains the box is only ~27 grains across, and the boundary term
+  credits a floor particle with half its neighbourhood, so a thin layer packs looser than bulk.
+  Worth revisiting only if it reads wrong on hardware.
+- **No water/fire coupling.** No steam, no evaporation, no extinguishing — the `kettle` scene is
+  two systems sharing a volume. Deliberate scope choice.
 - **Rotation is approximated.** Feeding only a gravity vector reproduces sloshing but omits
   Coriolis and centrifugal terms, so a fast spin will look under-energetic.

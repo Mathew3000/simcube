@@ -18,6 +18,8 @@
                 border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px;
                 cursor: pointer; }
   #hud button:hover { border-color: #3b4c63; }
+  #hud select { pointer-events: auto; font: inherit; background: #101620cc; color: var(--fg);
+                border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
   #err { position: fixed; inset: 0; display: none; place-content: center; padding: 40px;
          color: #ff8080; white-space: pre-wrap; }
 </style>
@@ -36,7 +38,10 @@
   <span>sim <b id="sim">–</b> ms</span>
   <span>render <b id="render">–</b> ms</span>
   <span>particles <b id="parts">–</b></span>
+  <select id="scene"></select>
   <button id="palette">palette</button>
+  <button id="cycle">auto-cycle</button>
+  <button id="bloomBtn">bloom</button>
   <button id="reset">reset</button>
   <a href="./panels.html" style="color:var(--dim)">panel view</a>
   <a href="./orient.html" style="color:var(--dim)">orientation check</a>
@@ -70,16 +75,22 @@ try {
   throw e;
 }
 
-const PARTICLES = 3000;
-if (!mod._ps_init(0, PARTICLES, 0xc0ffee)) {
-  fail('ps_init failed');
-  throw new Error('ps_init');
+if (!mod._ps_init_scene(0, 0, 0xc0ffee)) {
+  fail('ps_init_scene failed');
+  throw new Error('ps_init_scene');
 }
+
+// Scene names live in the WASM heap as NUL-terminated strings; read them out once.
+const sceneName = (i) => {
+  let p = mod._ps_scene_name(i), out = '';
+  for (; mod.HEAPU8[p] !== 0; p++) out += String.fromCharCode(mod.HEAPU8[p]);
+  return out;
+};
 
 // Scene, panel quads and orbit camera all come from cubeview.js, shared with orient.html so the
 // orientation checker exercises the same placement code this page does.
 const view = createCubeView(mod);
-const { scene, camera, renderer, controls, cube, panels, camRight, camUp } = view;
+const { scene, camera, renderer, controls, cube, panels, camRight, camUp, render } = view;
 
 // ?tilt=<degrees> pre-rotates the cube about world Z. Exists so the full
 // JS -> ps_set_orientation -> solver path can be verified in a headless screenshot: a slanted
@@ -134,15 +145,46 @@ renderer.domElement.addEventListener('pointerup', endDrag);
 renderer.domElement.addEventListener('pointercancel', endDrag);
 
 // --- ui --------------------------------------------------------------------
+const sceneSel = document.getElementById('scene');
+for (let i = 0; i < mod._ps_scene_count(); i++) {
+  const o = document.createElement('option');
+  o.value = String(i);
+  o.textContent = sceneName(i);
+  sceneSel.append(o);
+}
+sceneSel.onchange = () => mod._ps_set_scene(Number(sceneSel.value));
+
+// ?scene=<n> selects a preset at load, so any scene can be captured headlessly.
+{
+  const want = Number(new URLSearchParams(location.search).get('scene'));
+  if (Number.isFinite(want) && want > 0 && want < mod._ps_scene_count()) {
+    mod._ps_set_scene(want);
+    sceneSel.value = String(want);
+  }
+}
+
 let paletteIdx = 0;
 document.getElementById('palette').onclick = () => {
   paletteIdx = (paletteIdx + 1) % mod._ps_palette_count();
   mod._ps_set_palette(paletteIdx);
 };
 document.getElementById('reset').onclick = () => {
-  mod._ps_init(0, PARTICLES, 0xc0ffee);
-  mod._ps_set_palette(paletteIdx);
+  mod._ps_set_scene(Number(sceneSel.value));
   cube.quaternion.identity();
+};
+const cycleBtn = document.getElementById('cycle');
+cycleBtn.onclick = () => {
+  const on = mod._ps_auto_cycle() === 0;
+  mod._ps_set_auto_cycle(on ? 1 : 0);
+  cycleBtn.textContent = on ? 'cycling' : 'auto-cycle';
+  cycleBtn.style.color = on ? '#8fe3a0' : '';
+};
+const bloomBtn = document.getElementById('bloomBtn');
+let bloomOn = true;
+bloomBtn.onclick = () => {
+  bloomOn = !bloomOn;
+  view.setBloom(bloomOn);
+  bloomBtn.style.color = bloomOn ? '' : '#7d8b9c';
 };
 
 // --- frame loop ------------------------------------------------------------
@@ -172,11 +214,13 @@ function frame(now) {
   for (const p of panels) p.tex.needsUpdate = true;
 
   controls.update();
-  renderer.render(scene, camera);
+  render();
 
   fpsAcc += dt; fpsN++;
   if (now - hudAt > 250) {
     hudAt = now;
+    // Auto-cycle changes the scene inside the sim, so mirror it back into the dropdown.
+    if (mod._ps_auto_cycle()) sceneSel.value = String(mod._ps_scene());
     const s = new Float32Array(mod.HEAPF32.buffer, mod._ps_stats(), 4);
     el.fps.textContent = (fpsN / fpsAcc).toFixed(0);
     el.sim.textContent = s[0].toFixed(2);

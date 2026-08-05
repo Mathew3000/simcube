@@ -3,12 +3,16 @@
 // an orientation check that built its own scene would prove nothing about the real one.
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/OrbitControls.js';
+import { EffectComposer } from './vendor/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from './vendor/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from './vendor/jsm/postprocessing/UnrealBloomPass.js';
 
 // Builds the scene, one textured quad per panel, and an orbit camera.
 //
 // Every quad is placed from ps_panel_basis, never from a hardcoded cube layout, so the physics
 // and the visuals cannot disagree about where a panel is or which way it faces.
-export function createCubeView(mod, { canvasParent = document.body, frame = true } = {}) {
+export function createCubeView(mod, { canvasParent = document.body, frame = true,
+                                      bloom = true } = {}) {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 500);
   camera.position.set(46, 34, 62);
@@ -73,14 +77,31 @@ export function createCubeView(mod, { canvasParent = document.body, frame = true
     ));
   }
 
+  // Bloom, so the panels read as emitting light rather than as coloured squares. The threshold
+  // is low because every lit texel is supposed to glow -- these are LEDs, not lit surfaces.
+  let composer = null;
+  let bloomPass = null;
+  if (bloom) {
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.85, 0.55, 0.12);
+    composer.addPass(bloomPass);
+  }
+
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    if (composer) composer.setSize(innerWidth, innerHeight);
   });
+
+  // One entry point, so callers do not have to know whether bloom is in play.
+  const render = () => (composer ? composer.render() : renderer.render(scene, camera));
+  const setBloom = (on) => { if (bloomPass) bloomPass.enabled = on; };
 
   const camRight = () => new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
   const camUp = () => new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
 
-  return { THREE, scene, camera, renderer, controls, cube, panels, camRight, camUp };
+  return { THREE, scene, camera, renderer, controls, cube, panels, camRight, camUp,
+           render, setBloom, bloomPass };
 }

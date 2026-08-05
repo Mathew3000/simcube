@@ -163,3 +163,50 @@ TEST(sim_render_produces_lit_panels) {
   // Water on the floor lights the bottom face and the four sides; the top stays dark.
   CHECK(lit == 5);
 }
+
+TEST(sim_render_interpolation_moves_the_splat_not_the_state) {
+  // Lets the display run ahead of the physics: unconsumed accumulator time is covered visually
+  // instead of appearing as a stutter. It must never feed back into the simulation.
+  CHECK(g_sim.init(Simulation::kCube, 900, 17));
+  run(120);
+
+  const uint32_t before = g_sim.stateHash();
+
+  // Splat where the particles are.
+  g_sim.renderer().setTimeOffset(0.0f);
+  g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
+  uint64_t plain = 0;
+  for (int k = 0; k < 6; ++k) plain = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, plain);
+
+  // Splat a full frame ahead. Something must change, or the offset is being ignored.
+  g_sim.renderer().setTimeOffset(kFixedDt * 3.0f);
+  g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
+  uint64_t shifted = 0;
+  for (int k = 0; k < 6; ++k)
+    shifted = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, shifted);
+
+  CHECK(g_sim.stateHash() == before);  // rendering did not disturb the physics
+  CHECK(plain != shifted);             // and the offset actually did something
+
+  g_sim.renderer().setTimeOffset(0.0f);
+}
+
+TEST(sim_interpolation_is_off_for_a_settled_fluid) {
+  // A settled fluid has near-zero velocity, so interpolation must be a no-op there rather than
+  // introducing shimmer of its own.
+  CHECK(g_sim.init(Simulation::kCube, 900, 19));
+  run(400);
+
+  g_sim.renderer().setTimeOffset(0.0f);
+  g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
+  uint64_t a = 0;
+  for (int k = 0; k < 6; ++k) a = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, a);
+
+  g_sim.renderer().setTimeOffset(kFixedDt);
+  g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
+  uint64_t b = 0;
+  for (int k = 0; k < 6; ++k) b = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, b);
+
+  CHECK(a == b);
+  g_sim.renderer().setTimeOffset(0.0f);
+}

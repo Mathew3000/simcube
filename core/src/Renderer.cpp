@@ -32,8 +32,6 @@ void Renderer::init(const Geometry& g) {
   }
   atten_[kAttenSize] = 0;
 
-  // Heat's falloff is gentler as well as longer: squared would leave a plume crossing the
-  // middle of the box almost invisible on the side faces.
   // Heat's falloff is gentler as well as longer-ranged: squared would leave a plume crossing
   // the middle of the box nearly invisible on the side faces. This is between linear and
   // squared, and still reaches exactly zero at kHeatInfluence so the support stays compact.
@@ -67,8 +65,11 @@ void Renderer::clear() {
 
 void Renderer::splat(const Particles& p, const Geometry& g) {
   const int n = p.n;
+  const float dtOff = timeOffset_;
   for (int i = 0; i < n; ++i) {
-    const Vec3 q = p.pos(i);
+    // Extrapolate along the particle's own velocity. Only the splat moves; the simulation state
+    // is untouched, so this can never feed back into the physics.
+    const Vec3 q = (dtOff == 0.0f) ? p.pos(i) : p.pos(i) + p.vel(i) * dtOff;
     const int ch = channelOf(p.mat[i]);
 
     // Brute force over panels. With at most 8 of them the rejection test is one dot product

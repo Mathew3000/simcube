@@ -45,8 +45,8 @@ import createPartsim from './public/partsim.mjs';
 const mod = await createPartsim();
 mod._ps_init(0, 100, 1);
 
-const view = createCubeView(mod);
-const { renderer, scene, camera, controls, panels } = view;
+const view = createCubeView(mod, { bloom: false });  // bloom would smear the pattern
+const { renderer, scene, camera, controls, panels, render } = view;
 
 // ?cam=x,y,z moves the camera, so the other three faces can be inspected too (and captured in
 // a headless screenshot).
@@ -86,7 +86,7 @@ for (const p of panels) {
 
 function frame() {
   controls.update();
-  renderer.render(scene, camera);
+  render();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

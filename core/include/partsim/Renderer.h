@@ -31,6 +31,13 @@ class Renderer {
   // the fluid glow harder.
   void setExposure(float fullScale) { fullScale_ = pmax(1.0f, fullScale); }
 
+  // Advance each particle along its own velocity by this many seconds when splatting, without
+  // touching the simulation. Lets the display run faster than the physics: whatever time the
+  // fixed-step accumulator has not consumed yet is covered visually instead of being shown as a
+  // stutter. Zero means splat exactly where the particles are.
+  void setTimeOffset(float seconds) { timeOffset_ = seconds; }
+  float timeOffset() const { return timeOffset_; }
+
   // clear -> splat particles -> splat heat -> resolve every panel into the RGBA buffers.
   void render(const Particles& p, const FieldGrid& f, const Geometry& g);
 
@@ -60,6 +67,7 @@ class Renderer {
   int panels_ = 0;
   int texels_[kMaxPanels] = {0};
   float fullScale_ = 900.0f;
+  float timeOffset_ = 0.0f;
 
   // Radial splat kernel indexed by squared texel distance, and depth attenuation indexed by
   // distance from the panel. Both are LUTs so the inner loop has no divides, no sqrt and no

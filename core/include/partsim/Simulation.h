@@ -58,7 +58,16 @@ class Simulation {
   // Exactly one physics step, for tests and the golden sequence.
   void stepFixed() { fixedStep(kFixedDt); }
 
-  void render() { renderer_.render(particles_, field_, geometry_); }
+  // Renders with the accumulator's unconsumed time folded into the splat, so the picture keeps
+  // moving smoothly between physics steps rather than holding still and then jumping. Costs
+  // nothing: it is one multiply-add per particle inside a loop that already reads velocity.
+  void render() {
+    renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
+    renderer_.render(particles_, field_, geometry_);
+  }
+
+  void setInterpolate(bool on) { interpolate_ = on; }
+  bool interpolate() const { return interpolate_; }
 
   const FieldGrid& field() const { return field_; }
 
@@ -105,6 +114,7 @@ class Simulation {
   Vec3 jerk_{0.0f, 0.0f, 0.0f};  // container acceleration; see addContainerAccel
 
   float accumulator_ = 0.0f;
+  bool interpolate_ = true;
 };
 
 // A fixed scripted motion sequence, run identically on every target so the resulting hash can

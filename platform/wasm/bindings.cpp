@@ -93,6 +93,23 @@ PS_EXPORT void ps_set_stats_timing(float simMs, float renderMs) {
   g_sim.stats.renderMs = renderMs;
 }
 
+PS_EXPORT int ps_scene_count() { return sceneCount(); }
+PS_EXPORT int ps_scene() { return g_ready ? g_sim.scene() : 0; }
+PS_EXPORT void ps_set_scene(int id) { if (g_ready) g_sim.setScene(id); }
+
+// Returns a pointer to a NUL-terminated string in the WASM heap; JS reads it out of HEAPU8.
+// Cheaper and simpler than marshalling strings, and the table lives in rodata anyway.
+PS_EXPORT const char* ps_scene_name(int id) { return sceneAt(id).name; }
+
+PS_EXPORT void ps_set_auto_cycle(int on) { if (g_ready) g_sim.setAutoCycle(on != 0); }
+PS_EXPORT int ps_auto_cycle() { return (g_ready && g_sim.autoCycle()) ? 1 : 0; }
+
+// Load a scene as part of init, rather than a bare particle count.
+PS_EXPORT int ps_init_scene(int mode, int sceneId, uint32_t seed) {
+  g_ready = g_sim.initScene(mode, sceneId, seed);
+  return g_ready ? g_sim.particleCount() : 0;
+}
+
 PS_EXPORT void ps_set_palette(int index) {
   if (g_ready) g_sim.setPalette(&paletteAt(index));
 }
