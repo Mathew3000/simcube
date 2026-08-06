@@ -43,6 +43,16 @@ class Lsm6dsox {
   static constexpr float kAccelScaleG = 0.000244f;
   static constexpr float kGyroScaleRad = 0.0175f * 0.017453292f;
 
+  // The +-8g range is not a preference. A hand-shaken cube clips a +-2g part, and it clips
+  // exactly during the interaction the whole object exists for -- at which point the gravity
+  // estimate is being fed a truncated vector and the fluid lurches. So: assert that the scale
+  // factor and the configured range actually agree, at compile time, because the two live in
+  // different files and a range change that missed one of them would be invisible.
+  static_assert(kAccelScaleG * 32768.0f > 7.9f && kAccelScaleG * 32768.0f < 8.1f,
+                "accel scale does not match the +-8g range configured in CTRL1_XL");
+  // Gyro is deliberately NOT asserted the same way: the datasheet's 17.50 mdps/LSB puts full
+  // scale at 573 dps rather than 500, which is the part's own convention, not an error here.
+
  private:
   bool write8(uint8_t reg, uint8_t val);
   bool read(uint8_t reg, uint8_t* dst, size_t n);

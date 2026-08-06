@@ -22,7 +22,7 @@ device has been; see [Hardware bring-up](#hardware-bring-up) for the checklist o
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
-| `platform/host/` — tests, benchmark, image dump, memory report | **working**, 114 test cases green |
+| `platform/host/` — tests, benchmark, image dump, memory report | **working**, 120 test cases green |
 | `platform/wasm/` — WASM module + three.js cube | **working**, verified bit-identical to host |
 | `platform/esp32/` — PlatformIO firmware | **compiles and links**, 163.5 KB static of 320 KB; **never executed** |
 
@@ -47,10 +47,10 @@ yet.
 
 ## Prerequisites
 
-Only the host build works right now, and it needs almost nothing:
+The host build needs almost nothing:
 
 ```sh
-brew install cmake        # the only hard requirement today
+brew install cmake        # the only hard requirement
 ```
 
 A C++17 compiler (Apple Clang is fine) and `bash` are assumed. No third-party libraries,
@@ -67,8 +67,8 @@ pipx install platformio   # or use the VS Code extension's copy, see below
 `~/.platformio/penv/bin/pio`, which is where the VS Code extension installs it — so if you have
 that, there is nothing to install.
 
-Emscripten **is** installed at `~/emsdk` for the upcoming browser build. Note that emsdk
-needs Python ≥3.10 and macOS ships 3.9 with Xcode, so it must be pointed at a newer one:
+For the browser build, Emscripten is installed at `~/emsdk`. Note that emsdk needs Python ≥3.10
+and macOS ships 3.9 with Xcode, so it must be pointed at a newer one:
 
 ```sh
 export EMSDK_PYTHON=/opt/homebrew/bin/python3.12
@@ -89,7 +89,7 @@ Expect six ctest entries to pass:
 
 | test | what it checks |
 |---|---|
-| `unit` | 114 cases, ~60 s |
+| `unit` | 120 cases, ~75 s |
 | `no_libm` | `core/` calls no nondeterministic libm (see below) |
 | `wasm_determinism` | WASM output is bit-identical to host — **skips loudly** if the WASM build is absent |
 | `esp32_budget` | static pools at the device capacity profile fit internal SRAM, and the physics at those capacities still reproduces `scripts/golden_hash_esp32.txt` |
