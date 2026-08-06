@@ -35,6 +35,11 @@ if(PARTSIM_PROFILE STREQUAL "")
   add_test(NAME esp32_budget
            COMMAND ${CMAKE_COMMAND} -E env bash
                    ${CMAKE_SOURCE_DIR}/scripts/check_esp32_budget.sh)
+
+  # ...and the firmware must still compile and link for Xtensa. Skips if PlatformIO is absent.
+  add_test(NAME esp32_build
+           COMMAND ${CMAKE_COMMAND} -E env bash
+                   ${CMAKE_SOURCE_DIR}/scripts/check_esp32_build.sh)
 endif()
 
 # The golden hashes in scripts/golden_hash.txt must match what this build produces, or the

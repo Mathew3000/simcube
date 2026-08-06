@@ -11,10 +11,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# ~230KB is what is actually left of the S3's internal SRAM for the application: 512KB total,
-# less the ~150KB the ROM/bootloader reserves at the bottom, less the Arduino core, FreeRTOS
-# task stacks and the WiFi/BT stack's static allocations. Deliberately conservative -- the
-# linker's own number, printed by scripts/build_esp32.sh, is the authority.
+# A self-imposed ceiling on the simulation plus display footprint, not the hardware limit. The
+# actual figure, from the linker on a real build of platform/esp32: 327680 bytes of DRAM, of which
+# the firmware's static data is 159.7KB (this report's 127.6KB plus the Arduino core's own .bss)
+# and the HUB75 DMA buffers take another ~72KB from the heap at begin(). That leaves roughly 85KB
+# for task stacks and the allocator.
+#
+# 230KB keeps the simulation+display side well inside that, so growing a pool cannot quietly eat
+# the margin the DMA buffers need. Raise it deliberately, with the linker number in hand.
 BUDGET_KB="${PARTSIM_SRAM_BUDGET_KB:-230}"
 
 cmake -S . -B build-esp32 -DPARTSIM_PROFILE=esp32 -DCMAKE_BUILD_TYPE=RelWithDebInfo \

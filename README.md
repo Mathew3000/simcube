@@ -15,14 +15,16 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
-**Milestone 1 is complete.** All 12 steps done; next is Milestone 2, the ESP32 firmware.
+**Milestone 1 is complete. Milestone 2 (ESP32 firmware) is written but not yet run on
+hardware** — the panels and the board are in transit. Everything that can be verified without a
+device has been; see [Hardware bring-up](#hardware-bring-up) for the checklist of what cannot.
 
 | | state |
 |---|---|
 | `core/` — portable C++17 simulation | geometry, neighbour grid, PBF solver, splat renderer **working** |
-| `platform/host/` — tests, benchmark, image dump | **working**, 93 test cases green |
+| `platform/host/` — tests, benchmark, image dump, memory report | **working**, 114 test cases green |
 | `platform/wasm/` — WASM module + three.js cube | **working**, verified bit-identical to host |
-| `platform/esp32/` — PlatformIO firmware | not written yet |
+| `platform/esp32/` — PlatformIO firmware | **compiles and links**, 163.5 KB static of 320 KB; **never executed** |
 
 Working today: water, sand and fire in a 32³ cube, with seven scene presets, two palettes,
 optional auto-cycle, and bloom — running live as a three.js cube in the browser that you tilt
@@ -30,11 +32,16 @@ with the mouse to make it slosh. Water settles correctly under gravity from any 
 survives violent shaking without leaking; sand heaps and sinks through water; flames lean when
 the cube is tilted and get pushed around when it is shaken.
 
-Cross-target determinism is **verified**, not just intended: the WASM build produces
-bit-identical particle state and pixels to the native build across water, sand *and* fire, and
-runs within 5% of native speed.
+Cross-target determinism is **verified** between two of the three targets: the WASM build
+produces bit-identical particle state and pixels to the native build across water, sand *and*
+fire, and runs within 5% of native speed. The device is the third target and its reference hash
+is recorded (`scripts/golden_hash_esp32.txt`), but nothing has run on hardware to compare it
+against.
 
-Not yet: the ESP32 firmware (Milestone 2).
+Not yet verified at all: anything that requires the device to execute — frame rate, panel
+refresh, IMU behaviour, thermals, power. The firmware's pin assignment and the cube's face mount
+table are placeholders by necessity; both are facts about a physical object that does not exist
+yet.
 
 ---
 
@@ -50,9 +57,15 @@ A C++17 compiler (Apple Clang is fine) and `bash` are assumed. No third-party li
 no package manager, no network access at build time — the test harness is hand-rolled and
 `core/` deliberately depends on nothing but a handful of standard headers.
 
-Needed later, **not yet**:
+For the ESP32 firmware:
 
-- `pipx install platformio` for the ESP32 firmware — Milestone 2.
+```sh
+pipx install platformio   # or use the VS Code extension's copy, see below
+```
+
+`scripts/build_esp32.sh` also finds PlatformIO inside its own virtualenv at
+`~/.platformio/penv/bin/pio`, which is where the VS Code extension installs it — so if you have
+that, there is nothing to install.
 
 Emscripten **is** installed at `~/emsdk` for the upcoming browser build. Note that emsdk
 needs Python ≥3.10 and macOS ships 3.9 with Xcode, so it must be pointed at a newer one:
@@ -72,14 +85,21 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect four ctest entries to pass:
+Expect six ctest entries to pass:
 
 | test | what it checks |
 |---|---|
-| `unit` | 93 cases, ~20 s |
+| `unit` | 114 cases, ~60 s |
 | `no_libm` | `core/` calls no nondeterministic libm (see below) |
 | `wasm_determinism` | WASM output is bit-identical to host — **skips loudly** if the WASM build is absent |
+| `esp32_budget` | static pools at the device capacity profile fit internal SRAM, and the physics at those capacities still reproduces `scripts/golden_hash_esp32.txt` |
+| `esp32_build` | the firmware compiles and links for Xtensa — **skips loudly** without PlatformIO |
 | `golden_hash_current` | `scripts/golden_hash.txt` is not a stale reference |
+
+The two `esp32_*` entries need no hardware. They exist because `core/` is shared: a change that
+is fine on Clang and Emscripten can fail on the device — a stray `double` that
+`-Wdouble-promotion` catches, a pool that no longer fits, a header newlib lacks. Without them the
+first sign would be at flashing time.
 
 ### Running a subset of tests
 
@@ -296,34 +316,202 @@ If you intentionally change the solver or renderer, regenerate the reference:
 ./build/platform/host/partsim_golden -q > scripts/golden_hash.txt
 ```
 
+The device is the **third** target, and its reference is separate because it runs smaller pools
+(scene particle counts get clamped to capacity, so the trajectory legitimately differs):
+
+```sh
+./build-esp32/platform/host/partsim_golden -q > scripts/golden_hash_esp32.txt
+```
+
+Host and WASM agree today. The device side is a recorded expectation, not a result — the `g`
+console command prints the number to compare, and nobody has run it.
+
+---
+
+## The ESP32 firmware
+
+```sh
+scripts/build_esp32.sh                    # build the `cube` environment
+scripts/build_esp32.sh cube cube-fast panel
+scripts/build_esp32.sh --upload cube      # flash, once hardware exists
+```
+
+Three environments:
+
+| env | for |
+|---|---|
+| `cube` | the shipping build: six faces, `-ffp-contract=off`, deterministic |
+| `cube-fast` | FMA contraction on. A few percent faster and it **breaks** the determinism check by construction; the firmware says so at boot |
+| `panel` | one panel, for bringing a single display up before six exist. Uses the simulation's thin-slab mode — the same 3D code path |
+
+The plan called for `-ffp-contract=fast` on the device unconditionally. That cannot coexist with a
+third-target determinism check, so it became a separate labelled environment rather than a silent
+loss of the guarantee.
+
+### Static memory
+
+The budget is computed, not estimated:
+
+```sh
+./build-esp32/platform/host/partsim_memreport 230
+```
+
+At the device profile (1280 particles, 6 panels of 32×32):
+
+| | KB |
+|---|---|
+| Particles (SoA pool) | 51.3 |
+| Renderer (accumulation) | 36.3 |
+| FieldGrid (heat, ping-ponged) | 20.9 |
+| SpatialHash | 10.5 |
+| everything else in `Simulation` | 5.6 |
+| **`Simulation` total** | **124.6** |
+| HUB75 DMA, 6-bit double-buffered | 72.0 |
+| one-face RGB staging | 3.0 |
+| **total** | **199.6** |
+
+The linker agrees, and is the authority: 163.5 KB of static data out of 327.7 KB of DRAM (the
+extra over `Simulation` is the Arduino core's own `.bss`), plus ~72 KB the DMA buffers take from
+the heap at `begin()`. Roughly 85 KB left for stacks and the allocator.
+
+Two decisions came out of this:
+
+- **1280 particles is a CPU limit, not a memory one.** ~5500 cycles/particle/step at 240 MHz and
+  30 fps is about 1300; a bigger pool would only buy RAM pressure.
+- **No internal RGBA copy of the panels.** Six faces of RGBA is 24 KB, which was the difference
+  between fitting and not. The firmware resolves one face at a time into a 3 KB staging buffer,
+  through the same splat path the browser uses (`Simulation::accumulate` + `Renderer::resolve`),
+  so the two cannot drift apart visually.
+
+### Task layout
+
+| core | prio | task | |
+|---|---|---|---|
+| 1 | 2 | `simTask` | IMU fusion, solver, splat, blit, buffer flip — all the float |
+| 0 | 3 | `imuTask` | sensor reads only, **integer-only by construction** |
+| 1 | 1 | `loop()` | the serial console (Arduino's own loopTask) |
+
+FreeRTOS on Xtensa saves FPU context lazily, so float-using tasks must be pinned rather than left
+floating between cores. Both are. `imuTask` reads raw registers and does no float at all, so the
+two cores never contend for the FPU — which is also why this repo has its own 90-line LSM6DSOX
+driver instead of `Adafruit_LSM6DS`, whose `getEvent()` returns floats. It runs at a *higher*
+priority than the simulation despite doing less work: it has a 4.8 ms sample deadline, whereas a
+late frame is merely a late frame.
+
+Samples cross between them through a lock-free single-producer ring, and the consumer drains
+everything pending and runs the filter once per sample. So the filter always sees its designed
+208 Hz regardless of frame rate — which is what makes the host tests in `tests/test_motion.cpp`
+representative of the device.
+
+### Serial console
+
+115200 baud. `?` for help.
+
+| | |
+|---|---|
+| `s` / `s <n>` | list scenes / switch (gradual, crossfaded) |
+| `c` | toggle auto-cycle |
+| `b <0-255>` | panel brightness |
+| `m` / `m <face> <rot> <mirror>` | print / edit the face mount table |
+| `t` | orientation test pattern |
+| `i` | IMU state: down vector, container accel, gyro bias, accel trust |
+| `r` | frame timing (sim / splat / blit split) and free heap |
+| `g` | run the golden determinism sequence and print the hash |
+| `p` | pause the physics |
+
+---
+
+## Hardware bring-up
+
+Nothing below has been done. It is the list of things the host tests **cannot** stand in for,
+in the order that finds problems cheapest-first.
+
+**Before six panels exist.** Buy *one* first. 32×32 panels ship as both 1/16- and 1/8-scan with
+identical connectors, and many need an FM6126A/ICN2038S init sequence — so bring one up, then buy
+five more from the same batch.
+
+1. **Check `platform/esp32/src/Pins.h` against the wiring.** The assignment there is electrically
+   valid but arbitrary. The exclusion list in that file is not arbitrary: IO35/36/37 are consumed
+   permanently by the octal PSRAM on an N16R8, and using them appears to work until the first
+   PSRAM access.
+2. `scripts/build_esp32.sh --upload panel`. Expect the boot banner to report the geometry, the
+   chain size, and free heap after init. A `FATAL: HUB75 init failed` means the pins.
+3. `t` — the test pattern. A white dot at texel (1,1), a 3-pixel red arm along +x and a 5-pixel
+   green arm along +y. Two different lengths on purpose, so a 90° rotation is distinguishable
+   from a mirror at a glance. If the panel is noise rather than a pattern, suspect CLK or LAT.
+4. `r` — frame timing. **This is the number the whole particle budget rests on** and it has never
+   been measured. The estimate is ~3 ms blit, and sim+splat within ~28 ms at 1280 particles. If
+   sim time is far worse than that, the levers are (in order) particle count, `kSplatInfluence`,
+   splatting at half resolution, and replacing `drawPixelRGB888` with a direct row write — the
+   `ChainRun` structure in `ChainMap` exists so that last one does not disturb the mapping.
+5. `g` — the determinism check. Must print `a55e186f`, the first field of
+   `scripts/golden_hash_esp32.txt`. A mismatch here means the device and the browser are running
+   different physics, and it is worth stopping to find out why. Blocks the display ~30 s.
+6. **IMU.** `i` with the object resting on each face in turn. The `down` vector must read −1 on
+   whichever object axis is physically down. If the axes are permuted or flipped, that is the
+   `AxisMap` in `setup()` — one 3×3 signed permutation, and the only place mounting orientation is
+   described. Then check `trust` falls to ~0 while shaking and returns to ~1 at rest.
+
+**Once six panels exist.**
+
+7. `m` — calibrate the mount table against the built cube, using `t` and adjusting until all six
+   faces read the same. This is why it is a runtime command: reflashing once per guess is
+   miserable. The mapping is proven to stay a bijection under every rotation/mirror combination
+   (`tests/test_chainmap.cpp`), so a typo cannot silently blank a face — it is refused.
+   **The calibrated table is not yet persisted**; copy it into `ChainMap::defaultMounts` or add
+   NVS storage.
+8. **Signal integrity** is the top hardware risk: ~1.4 m of unterminated ribbon clocked at 16 MHz.
+   Design in 22–33 Ω series resistors on CLK/LAT/OE/RGB and a 74AHCT245 repeater footprint *now* —
+   retrofitting into a finished cube is miserable.
+9. **Power: 5 V / 20 A**, per-panel injection on 14–16 AWG, never through the pigtails. 1000 µF
+   local bulk, a separate regulated rail for the S3, the PSU outside the cube, and vents or a fan.
+
 ---
 
 ## Layout
 
 ```
 core/                    portable C++17 — no platform deps, no malloc after init, no libm
-  include/partsim/       Math Types Config Rng Geometry SimVolume
-                         Particles SpatialHash Solver
+  library.json           makes core/ a PlatformIO library (consumed via symlink://)
+  include/partsim/       Math Types Config Rng Geometry SimVolume Particles SpatialHash
+                         Solver FieldGrid Renderer Palette Scene Simulation
+                         MotionSource  — IMU fusion, testable without an IMU
+                         ChainMap      — cube face → HUB75 chain pixel
   src/
-platform/host/           bench.cpp — inspector and benchmark
+platform/host/           bench.cpp ppm_dump.cpp golden.cpp memreport.cpp
 platform/wasm/           bindings.cpp (C ABI)
   web/                   index.html (3D cube) panels.html orient.html cubeview.js
   web/vendor/            pinned three.js r170 + OrbitControls (MIT, committed on purpose)
-platform/esp32/          (not yet) PlatformIO firmware
+platform/esp32/          platformio.ini
+  src/                   main.cpp (tasks + console) PanelDriver Lsm6dsox Pins.h
 tests/                   hand-rolled harness (check.h) + test_*.cpp
-scripts/                 build_wasm.sh serve.sh check_determinism.mjs
-                         check_no_libm.sh check_wasm.sh check_golden.sh golden_hash.txt
+scripts/                 build_wasm.sh build_esp32.sh serve.sh check_determinism.mjs
+                         check_no_libm.sh check_wasm.sh check_golden.sh
+                         check_esp32_budget.sh check_esp32_build.sh
+                         golden_hash.txt golden_hash_esp32.txt
 ```
 
-Compile-time capacities are CMake cache variables, so the ESP32 build can shrink the static
-pools without touching source:
+Note where the IMU filter and the panel mapping live: in `core/`, not in `platform/esp32/`. They
+are the only parts of the hardware path that are pure logic, so they are the only parts that can be
+tested without a device — which is exactly why they are on the portable side of the line. The ESP32
+layer above them reads registers and pushes pixels, and nothing more.
+
+### Capacities
+
+The device numbers live in `core/include/partsim/Config.h` behind one `PARTSIM_PROFILE_ESP32`
+switch, not as a list of `-D` flags in `platformio.ini`. Spelling them out in the build file would
+give the host verification and the firmware each their own copy of the budget, and the first time
+one was edited the checks would quietly start measuring a configuration nobody ships.
 
 ```sh
-cmake -B build -DPARTSIM_MAX_PARTICLES=3000 -DPARTSIM_MAX_GRID_CELLS=2048
+cmake -B build-esp32 -DPARTSIM_PROFILE=esp32     # build host tools at device capacities
+cmake -B build -DPARTSIM_MAX_PARTICLES=3000      # or force one directly
 ```
 
 `PARTSIM_MAX_PARTICLES`, `PARTSIM_MAX_PANELS`, `PARTSIM_MAX_PANEL_TEXELS`,
-`PARTSIM_MAX_GRID_CELLS`, `PARTSIM_MAX_FIELD_CELLS`.
+`PARTSIM_MAX_GRID_CELLS`, `PARTSIM_MAX_FIELD_CELLS`, `PARTSIM_INTERNAL_PIXELS`. Each defaults to
+empty in CMake so that an unset one falls through to the profile rather than being pinned to a
+stale copy of it.
 
 ---
 
@@ -449,3 +637,16 @@ before suspecting convergence.
   two systems sharing a volume. Deliberate scope choice.
 - **Rotation is approximated.** Feeding only a gravity vector reproduces sloshing but omits
   Coriolis and centrifugal terms, so a fast spin will look under-energetic.
+- **Real frame rate has never been measured — on either target.** Headless Chrome's software
+  rendering and virtualised timers made its readings meaningless in Milestone 1, and the device
+  does not exist yet. The `r` console command and the browser overlay both report it; until one of
+  them is read on real hardware, the particle budget is an estimate.
+- **The firmware has never executed.** It compiles, links and fits, and every piece of it that is
+  pure logic is unit-tested — but "compiles and fits" is not "works". See
+  [Hardware bring-up](#hardware-bring-up).
+- **Pin assignment and mount table are placeholders.** Both describe a physical object that does
+  not exist. The mount table is at least editable at runtime (`m`), but is **not persisted** across
+  reboots yet.
+- **The IMU axis map is identity.** It has to be, until someone can rest the object on each face
+  and read `i`. The filter itself is tested against synthetic samples, including a deliberately
+  permuted-and-flipped mounting.

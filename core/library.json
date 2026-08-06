@@ -1,0 +1,22 @@
+{
+  "name": "partsim_core",
+  "version": "0.2.0",
+  "description": "Portable particle simulation core: PBF fluid, granular sand, advected heat field, panel splatting. No platform dependencies, no dynamic allocation, no libm transcendentals.",
+  "keywords": ["simulation", "fluid", "particles", "led", "hub75"],
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "export": {
+    "include": ["include/**", "src/**", "library.json"]
+  },
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include",
+    "flags": [
+      "-ffp-contract=off",
+      "-fno-math-errno",
+      "-Wdouble-promotion",
+      "-Wfloat-conversion"
+    ]
+  }
+}
