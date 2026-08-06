@@ -61,7 +61,14 @@ TEST(noalloc_simulation_never_allocates_after_init) {
   std::printf("       arming allocation trap\n");
   std::fflush(stdout);
 
+  // Measure init on its own. g_count is program-wide, so reporting it as "allocations during
+  // init" was simply wrong -- it was dominated by whatever earlier test cases had allocated,
+  // and it visibly moved when unrelated tests were added. Init runs on the device too, so it
+  // is worth its own assertion rather than a mislabelled number.
+  const long beforeInit = g_count;
   CHECK(g_sim.initScene(Simulation::kCube, 3, 1));  // water and sand
+  const long initAllocs = g_count - beforeInit;
+  CHECK(initAllocs == 0);
   const long before = g_count;
 
   g_trap = true;
@@ -84,7 +91,7 @@ TEST(noalloc_simulation_never_allocates_after_init) {
   g_trap = false;
 
   CHECK(g_count == before);  // reached only if nothing aborted
-  std::printf("       %ld allocations during init, 0 after\n", before);
+  std::printf("       %ld allocations during init, 0 after\n", initAllocs);
 }
 
 TEST(noalloc_every_scene_loads_without_allocating) {

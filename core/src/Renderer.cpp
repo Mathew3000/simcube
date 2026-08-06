@@ -214,11 +214,17 @@ void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
   }
 }
 
-void Renderer::render(const Particles& p, const FieldGrid& f, const Geometry& g) {
+void Renderer::accumulate(const Particles& p, const FieldGrid& f, const Geometry& g) {
   clear();
   splat(p, g);
   splatField(f, g);
+}
+
+#if PARTSIM_INTERNAL_PIXELS
+void Renderer::render(const Particles& p, const FieldGrid& f, const Geometry& g) {
+  accumulate(p, f, g);
   for (int k = 0; k < panels_; ++k) resolve(k, pixels_[k], 4);
 }
+#endif
 
 }  // namespace partsim

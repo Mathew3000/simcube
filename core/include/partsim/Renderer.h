@@ -46,8 +46,15 @@ class Renderer {
   void setTimeOffset(float seconds) { timeOffset_ = seconds; }
   float timeOffset() const { return timeOffset_; }
 
+  // clear -> splat particles -> splat heat. Stops short of resolving, so a caller with no room
+  // for a second full copy of the panels can resolve one face at a time into its own buffer.
+  // This is the ESP32 path; render() below is this plus the resolve loop.
+  void accumulate(const Particles& p, const FieldGrid& f, const Geometry& g);
+
+#if PARTSIM_INTERNAL_PIXELS
   // clear -> splat particles -> splat heat -> resolve every panel into the RGBA buffers.
   void render(const Particles& p, const FieldGrid& f, const Geometry& g);
+#endif
 
   void clear();
   void splat(const Particles& p, const Geometry& g);
@@ -57,9 +64,11 @@ class Renderer {
   // bytesPerTexel: 3 for tight RGB (LED panels), 4 for RGBA (WebGL wants alignment 4).
   void resolve(int panel, uint8_t* out, int bytesPerTexel) const;
 
+#if PARTSIM_INTERNAL_PIXELS
   // Stable-address RGBA8 buffer for panel i, filled by render(). The WASM layer hands these
   // addresses to JS once and never again, so the browser uploads straight out of the heap.
   const uint8_t* panelPixels(int i) const { return pixels_[i]; }
+#endif
   int panelCount() const { return panels_; }
 
   // Raw accumulated intensity, for tests.
@@ -90,7 +99,9 @@ class Renderer {
   float kernelScale_ = 1.0f;
 
   uint16_t accum_[kMaxPanels][kMaxPanelTexels * kChannelCount];
+#if PARTSIM_INTERNAL_PIXELS
   uint8_t pixels_[kMaxPanels][kMaxPanelTexels * 4];
+#endif
 };
 
 }  // namespace partsim

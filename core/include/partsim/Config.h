@@ -1,22 +1,58 @@
 #pragma once
 #include <cstdint>
 
-// Compile-time capacities. Defaults suit a host/WASM build; the ESP32 build overrides them
-// downward via platformio.ini build_flags so the static pools fit internal SRAM.
+// Compile-time capacities. Defaults suit a host/WASM build; the ESP32 needs far smaller pools.
+//
+// The ESP32 numbers live HERE, selected by one -DPARTSIM_PROFILE_ESP32, rather than as a list of
+// -DPARTSIM_MAX_* in platformio.ini. Spelling them out in the build file would mean the host
+// verification and the firmware each carry their own copy of the budget, and the first time one
+// was edited the checks would quietly start measuring a configuration nobody ships.
+#ifdef PARTSIM_PROFILE_ESP32
+
+// 1280 particles is a CPU limit, not a memory one. A bottom-up cycle count came to ~5500
+// cycles/particle/step, which at 240MHz and 30 FPS is about 1300 -- so a larger pool would
+// only buy RAM pressure in exchange for particles the processor cannot integrate anyway.
+#define PARTSIM_DEFAULT_MAX_PARTICLES 1280
+#define PARTSIM_DEFAULT_MAX_PANELS 6
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 1024  // 32x32
+// 32-unit cube at kCellSize 3.0, plus the grid's padding: 12^3 with room to spare.
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS 4096
+// 32-unit cube at kFieldCell 1.5: 22^3 = 10648, and the grid is ping-ponged, so this is the
+// single largest pool after the particles. Do not round it up generously.
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS 10648
+// No internal RGBA copy of every panel: the firmware resolves one face at a time into a single
+// 3KB staging buffer and blits it. Six panels of RGBA is 24KB, which is the difference between
+// fitting internal SRAM and not.
+#define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
+
+#else
+
+#define PARTSIM_DEFAULT_MAX_PARTICLES 16384
+#define PARTSIM_DEFAULT_MAX_PANELS 8
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS 32768
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS 32768
+#define PARTSIM_DEFAULT_INTERNAL_PIXELS 1
+
+#endif
+
 #ifndef PARTSIM_MAX_PARTICLES
-#define PARTSIM_MAX_PARTICLES 16384
+#define PARTSIM_MAX_PARTICLES PARTSIM_DEFAULT_MAX_PARTICLES
 #endif
 #ifndef PARTSIM_MAX_PANELS
-#define PARTSIM_MAX_PANELS 8
+#define PARTSIM_MAX_PANELS PARTSIM_DEFAULT_MAX_PANELS
 #endif
 #ifndef PARTSIM_MAX_PANEL_TEXELS
-#define PARTSIM_MAX_PANEL_TEXELS 4096
+#define PARTSIM_MAX_PANEL_TEXELS PARTSIM_DEFAULT_MAX_PANEL_TEXELS
 #endif
 #ifndef PARTSIM_MAX_GRID_CELLS
-#define PARTSIM_MAX_GRID_CELLS 32768
+#define PARTSIM_MAX_GRID_CELLS PARTSIM_DEFAULT_MAX_GRID_CELLS
 #endif
 #ifndef PARTSIM_MAX_FIELD_CELLS
-#define PARTSIM_MAX_FIELD_CELLS 32768
+#define PARTSIM_MAX_FIELD_CELLS PARTSIM_DEFAULT_MAX_FIELD_CELLS
+#endif
+#ifndef PARTSIM_INTERNAL_PIXELS
+#define PARTSIM_INTERNAL_PIXELS PARTSIM_DEFAULT_INTERNAL_PIXELS
 #endif
 
 namespace partsim {

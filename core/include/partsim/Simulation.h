@@ -56,6 +56,11 @@ class Simulation {
   //
   // Decays over a few frames so a flick reads as an impulse with follow-through.
   void addContainerAccel(Vec3 a) { jerk_ += a; }
+  // Overwrite rather than accumulate. The browser feeds discrete flicks, so accumulating with
+  // decay is right there; an IMU feeds a continuous signal at 208 Hz, and accumulating that
+  // would sum ~3 samples per physics step into a container acceleration several times the
+  // measured one. The IMU path therefore sets, and the decay in fixedStep never engages.
+  void setContainerAccel(Vec3 a) { jerk_ = a; }
   void addContainerAccelWorld(Quat q, Vec3 a) { jerk_ += rotateByConjugate(q, a); }
   Vec3 containerAccel() const { return jerk_; }
 
@@ -67,10 +72,21 @@ class Simulation {
   // Renders with the accumulator's unconsumed time folded into the splat, so the picture keeps
   // moving smoothly between physics steps rather than holding still and then jumping. Costs
   // nothing: it is one multiply-add per particle inside a loop that already reads velocity.
+  // Splat everything into the accumulation buffers without resolving colour. The ESP32 has no
+  // room for an RGBA copy of all six panels, so the firmware calls this and then resolves each
+  // face into one shared staging buffer. Identical splat path to render(), so the device and
+  // the browser cannot drift apart visually.
+  void accumulate() {
+    renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
+    renderer_.accumulate(particles_, field_, geometry_);
+  }
+
+#if PARTSIM_INTERNAL_PIXELS
   void render() {
     renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
     renderer_.render(particles_, field_, geometry_);
   }
+#endif
 
   void setInterpolate(bool on) { interpolate_ = on; }
   bool interpolate() const { return interpolate_; }

@@ -9,6 +9,8 @@ add_executable(partsim_tests
   test_sand.cpp
   test_field.cpp
   test_noalloc.cpp
+  test_motion.cpp
+  test_chainmap.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -26,6 +28,14 @@ add_test(NAME no_libm
 add_test(NAME wasm_determinism
          COMMAND ${CMAKE_COMMAND} -E env bash
                  ${CMAKE_SOURCE_DIR}/scripts/check_wasm.sh)
+
+# The device capacity profile: pools must fit internal SRAM, and the physics at those
+# capacities must still be reproducible. Runs without any hardware attached.
+if(PARTSIM_PROFILE STREQUAL "")
+  add_test(NAME esp32_budget
+           COMMAND ${CMAKE_COMMAND} -E env bash
+                   ${CMAKE_SOURCE_DIR}/scripts/check_esp32_budget.sh)
+endif()
 
 # The golden hashes in scripts/golden_hash.txt must match what this build produces, or the
 # WASM comparison is measuring against a stale reference.
