@@ -23,38 +23,56 @@ bool ChainMap::validate(const FaceMount* mounts, int count) const {
 }
 
 bool ChainMap::init(const Geometry& g, const FaceMount* mounts, int count) {
+  // The all-panels form. Still strict about the count: a node that claims to drive everything
+  // but names fewer faces than exist would leave faces unlit, which is worth refusing rather
+  // than discovering on the bench.
   if (count != g.count()) return false;
+  int all[kMaxPanels];
+  for (int k = 0; k < count && k < kMaxPanels; ++k) all[k] = k;
+  return init(g, mounts, all, count);
+}
+
+bool ChainMap::init(const Geometry& g, const FaceMount* mounts, const int* panels, int count) {
+  count_ = 0;
   if (count <= 0 || count > kMaxPanels) return false;
+  if (count > g.count()) return false;
 
   // A daisy chain is one canvas of uniform tiles. Mixed panel sizes would need a per-slot x
   // offset table, and no arrangement we build wants one -- so reject rather than pretend.
+  uint32_t seenPanel = 0;
   for (int k = 0; k < count; ++k) {
-    w_[k] = g.at(k).w;
-    h_[k] = g.at(k).h;
-    if (w_[k] != g.at(0).w || h_[k] != g.at(0).h) return false;
+    const int p = panels[k];
+    if (p < 0 || p >= g.count()) return false;
+    if (seenPanel & (1u << p)) return false;  // the same face driven twice
+    seenPanel |= 1u << p;
+    w_[k] = g.at(p).w;
+    h_[k] = g.at(p).h;
+    if (w_[k] != g.at(panels[0]).w || h_[k] != g.at(panels[0]).h) return false;
+    panelOf_[k] = p;
   }
   if (!validate(mounts, count)) return false;
 
   for (int k = 0; k < count; ++k) mounts_[k] = mounts[k];
   count_ = count;
+  // The chain this node drives, not the whole cube: two 64-wide faces make a 128-wide canvas.
   chainW_ = (int)w_[0] * count;
   chainH_ = (int)h_[0];
   return true;
 }
 
-bool ChainMap::setMount(int panel, FaceMount m) {
-  if (panel < 0 || panel >= count_) return false;
+bool ChainMap::setMount(int face, FaceMount m) {
+  if (face < 0 || face >= count_) return false;
   FaceMount trial[kMaxPanels];
   for (int k = 0; k < count_; ++k) trial[k] = mounts_[k];
-  trial[panel] = m;
+  trial[face] = m;
   if (!validate(trial, count_)) return false;
-  mounts_[panel] = m;
+  mounts_[face] = m;
   return true;
 }
 
-void ChainMap::map(int panel, int i, int j, int& cx, int& cy) const {
-  const FaceMount& m = mounts_[panel];
-  const int w = (int)w_[panel], h = (int)h_[panel];
+void ChainMap::map(int face, int i, int j, int& cx, int& cy) const {
+  const FaceMount& m = mounts_[face];
+  const int w = (int)w_[face], h = (int)h_[face];
 
   int dx, dy;
   switch (m.rotate) {
@@ -72,12 +90,12 @@ void ChainMap::map(int panel, int i, int j, int& cx, int& cy) const {
   cy = h - 1 - dy;
 }
 
-ChainRun ChainMap::row(int panel, int j) const {
-  ChainRun r{0, 0, 1, 0, (int)w_[panel]};
-  map(panel, 0, j, r.cx, r.cy);
+ChainRun ChainMap::row(int face, int j) const {
+  ChainRun r{0, 0, 1, 0, (int)w_[face]};
+  map(face, 0, j, r.cx, r.cy);
   if (r.count >= 2) {
     int x1, y1;
-    map(panel, 1, j, x1, y1);
+    map(face, 1, j, x1, y1);
     r.dx = x1 - r.cx;
     r.dy = y1 - r.cy;
   }

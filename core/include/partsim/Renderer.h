@@ -23,7 +23,24 @@ namespace partsim {
 //    through the palette ramps. That is what makes palettes pure data.
 class Renderer {
  public:
-  void init(const Geometry& g);
+  // Render every panel in the geometry. Fails if there are more panels than render slots.
+  bool init(const Geometry& g);
+
+  // Render only the listed panels, by panel index.
+  //
+  // This is the multi-node case: every node holds the FULL panel table, because
+  // Geometry::bounds() derives the container from it and the container must be identical
+  // everywhere -- but a node allocates accumulation buffers only for the faces it physically
+  // drives. Accumulators are indexed by slot internally; every public method still speaks in
+  // panel indices, so nothing above this line has to know.
+  bool init(const Geometry& g, const int* panels, int count);
+
+  // Whether this renderer produces pixels for that panel at all.
+  bool rendersPanel(int panel) const {
+    return panel >= 0 && panel < kMaxPanels && slotOf_[panel] >= 0;
+  }
+  // Panel index for render slot s, or -1.
+  int panelAtSlot(int s) const { return (s >= 0 && s < renderCount_) ? panelOf_[s] : -1; }
   void setPalette(const Palette* p) { palette_ = p; paletteB_ = nullptr; blend_ = 0.0f; }
   const Palette& palette() const { return *palette_; }
 
@@ -67,16 +84,21 @@ class Renderer {
 #if PARTSIM_INTERNAL_PIXELS
   // Stable-address RGBA8 buffer for panel i, filled by render(). The WASM layer hands these
   // addresses to JS once and never again, so the browser uploads straight out of the heap.
-  const uint8_t* panelPixels(int i) const { return pixels_[i]; }
+  // Null for a panel this renderer does not drive.
+  const uint8_t* panelPixels(int i) const {
+    return rendersPanel(i) ? pixels_[slotOf_[i]] : nullptr;
+  }
 #endif
-  int panelCount() const { return panels_; }
+  // Panels this renderer produces pixels for -- not how many exist in the geometry.
+  int panelCount() const { return renderCount_; }
   // Kernel half-width in texels, derived from kSplatRadiusWorld and the pitch. Exposed so a test
   // can assert it actually tracks the pitch rather than silently staying at its old value.
   int footprint() const { return footprint_; }
 
-  // Raw accumulated intensity, for tests.
+  // Raw accumulated intensity, for tests. Zero for a panel that is not driven here.
   uint16_t accumAt(int panel, int i, int j, int w, int channel) const {
-    return accum_[panel][(j * w + i) * kChannelCount + channel];
+    if (!rendersPanel(panel)) return 0;
+    return accum_[slotOf_[panel]][(j * w + i) * kChannelCount + channel];
   }
 
  private:
@@ -86,8 +108,11 @@ class Renderer {
   const Palette* palette_ = nullptr;
   const Palette* paletteB_ = nullptr;  // crossfade target, null when not fading
   float blend_ = 0.0f;
-  int panels_ = 0;
-  int texels_[kMaxPanels] = {0};
+  // Render slots, not panels. slotOf_ maps panel -> slot (-1 for undriven), panelOf_ back again.
+  int renderCount_ = 0;
+  int slotOf_[kMaxPanels];
+  int panelOf_[kMaxRenderPanels];
+  int texels_[kMaxRenderPanels] = {0};
   float fullScale_ = 900.0f;
   float timeOffset_ = 0.0f;
 
@@ -104,9 +129,9 @@ class Renderer {
   // At pitch 1.0 this is 2, the value it used to be hardcoded to.
   int footprint_ = 2;
 
-  uint16_t accum_[kMaxPanels][kMaxPanelTexels * kChannelCount];
+  uint16_t accum_[kMaxRenderPanels][kMaxPanelTexels * kChannelCount];
 #if PARTSIM_INTERNAL_PIXELS
-  uint8_t pixels_[kMaxPanels][kMaxPanelTexels * 4];
+  uint8_t pixels_[kMaxRenderPanels][kMaxPanelTexels * 4];
 #endif
 };
 

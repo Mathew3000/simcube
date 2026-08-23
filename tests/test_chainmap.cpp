@@ -185,3 +185,63 @@ TEST(chain_map_live_remount_keeps_the_table_valid) {
   CHECK(cm.setMount(2, FaceMount{2, 3, 1}));
   checkBijection(cm);
 }
+
+// --- driving a subset of the faces ---------------------------------------------------------------
+// A display node in a multi-node cube holds the whole six-panel table -- Geometry::bounds() derives
+// the container from it and every node must agree on that container exactly -- but drives only its
+// own faces. So the chain it owns is two tiles wide, not six.
+
+TEST(chain_map_drives_a_subset_of_faces) {
+  const Geometry g = cube();
+  // This node owns geometry panels 2 and 3, in chain slots 0 and 1.
+  const int panels[2] = {2, 3};
+  const FaceMount mounts[2] = {{0, 0, 0}, {1, 2, 0}};
+
+  ChainMap cm;
+  CHECK(cm.init(g, mounts, panels, 2));
+  CHECK(cm.count() == 2);
+  CHECK(cm.chainWidth() == 2 * kRes);   // two tiles, not six
+  CHECK(cm.chainHeight() == kRes);
+
+  // Driven-face index -> geometry panel. The two only coincide when everything is driven, and
+  // conflating them would blit the wrong face's pixels to the wrong physical panel.
+  CHECK(cm.panelAt(0) == 2);
+  CHECK(cm.panelAt(1) == 3);
+  CHECK(cm.panelAt(2) == -1);
+
+  // Still a bijection, over this node's own chain.
+  static uint8_t hits[2 * kRes * kRes];
+  for (int i = 0; i < 2 * kRes * kRes; ++i) hits[i] = 0;
+  for (int f = 0; f < 2; ++f)
+    for (int j = 0; j < kRes; ++j)
+      for (int i = 0; i < kRes; ++i) {
+        int cx = -1, cy = -1;
+        cm.map(f, i, j, cx, cy);
+        CHECK(cx >= 0 && cx < cm.chainWidth());
+        CHECK(cy >= 0 && cy < cm.chainHeight());
+        const int flat = cy * cm.chainWidth() + cx;
+        CHECK(hits[flat] == 0);
+        hits[flat] = 1;
+      }
+  for (int i = 0; i < 2 * kRes * kRes; ++i) CHECK(hits[i] == 1);
+}
+
+TEST(chain_map_rejects_a_bad_subset) {
+  const Geometry g = cube();
+  ChainMap cm;
+  const FaceMount m2[2] = {{0, 0, 0}, {1, 0, 0}};
+
+  const int twice[2] = {3, 3};      // the same face driven twice would be blitted twice
+  CHECK(!cm.init(g, m2, twice, 2));
+  const int outOfRange[2] = {0, 9};  // no such panel
+  CHECK(!cm.init(g, m2, outOfRange, 2));
+  const int tooMany[7] = {0, 1, 2, 3, 4, 5, 0};
+  CHECK(!cm.init(g, m2, tooMany, 7));
+
+  // ...and the all-faces form still refuses a count that would leave faces unlit. That check was
+  // deliberate before the subset form existed; it keeps its meaning for the all-faces overload,
+  // where naming fewer faces than exist really is a mistake rather than a subset.
+  FaceMount ok[8];
+  ChainMap::defaultMounts(6, ok);
+  CHECK(!cm.init(g, ok, 5));
+}

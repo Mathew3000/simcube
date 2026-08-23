@@ -397,3 +397,94 @@ TEST(renderer_peak_accumulation_is_pitch_invariant) {
   CHECK(ratio > 0.75f);
   CHECK(ratio < 1.25f);
 }
+
+// --- rendering a subset of the faces -------------------------------------------------------------
+
+TEST(renderer_subset_only_touches_its_own_faces) {
+  const Geometry g = Geometry::cube(32, 1.0f);
+  const int mine[2] = {0, 4};  // the -Z face and the bottom
+  CHECK(g_r.init(g, mine, 2));
+  CHECK(g_r.panelCount() == 2);
+  CHECK(g_r.rendersPanel(0));
+  CHECK(g_r.rendersPanel(4));
+  CHECK(!g_r.rendersPanel(1));
+  CHECK(g_r.panelAtSlot(1) == 4);
+
+  // A particle in a corner is near three faces; only the two we own may light up.
+  g_p.clear();
+  g_p.add(Vec3{-15.0f, -15.0f, -15.0f}, Vec3{0, 0, 0}, kWater);
+  g_r.clear();
+  g_r.splat(g_p, g);
+
+  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) > 0);
+  CHECK(totalIntensity(g_r, 4, 32, 32, kChWater) > 0);
+  // Panel 2 (-X) is also within reach of that corner, and must stay dark here -- accumAt reports
+  // zero for an undriven face rather than reading someone else's slot.
+  CHECK(totalIntensity(g_r, 2, 32, 32, kChWater) == 0);
+}
+
+TEST(renderer_subset_is_identical_to_the_full_render_on_its_own_faces) {
+  // The property the whole multi-node design rests on: a display node must produce exactly the
+  // pixels a single-process render would have produced for those faces. Not approximately.
+  const Geometry g = Geometry::cube(32, 1.0f);
+
+  auto fill = [] {
+    g_p.clear();
+    for (int i = 0; i < 500; ++i) {
+      const float t = (float)i;
+      g_p.add(Vec3{-12.0f + fsin(t * 0.7f) * 10.0f, -14.0f + (float)(i % 17) * 1.3f,
+                   fcos(t * 0.31f) * 11.0f},
+              Vec3{0, 0, 0}, (i % 4 == 0) ? kSand : kWater);
+    }
+  };
+
+  static uint64_t whole[6];
+  g_r.init(g);
+  fill();
+  g_r.clear();
+  g_r.splat(g_p, g);
+  for (int k = 0; k < 6; ++k) {
+    uint64_t h = 1469598103934665603ull;
+    for (int j = 0; j < 32; ++j)
+      for (int i = 0; i < 32; ++i)
+        for (int c = 0; c < kChannelCount; ++c) {
+          const uint16_t v = g_r.accumAt(k, i, j, 32, c);
+          h = fnv1a(&v, sizeof(v), h);
+        }
+    whole[k] = h;
+  }
+
+  // Now the same particles through three 2-face nodes, and every face must match bit for bit.
+  const int split[3][2] = {{0, 1}, {2, 3}, {4, 5}};
+  for (int node = 0; node < 3; ++node) {
+    CHECK(g_r.init(g, split[node], 2));
+    fill();
+    g_r.clear();
+    g_r.splat(g_p, g);
+    for (int s = 0; s < 2; ++s) {
+      const int k = split[node][s];
+      uint64_t h = 1469598103934665603ull;
+      for (int j = 0; j < 32; ++j)
+        for (int i = 0; i < 32; ++i)
+          for (int c = 0; c < kChannelCount; ++c) {
+            const uint16_t v = g_r.accumAt(k, i, j, 32, c);
+            h = fnv1a(&v, sizeof(v), h);
+          }
+      CHECK(h == whole[k]);
+    }
+  }
+  std::printf("       3 nodes x 2 faces reproduce all 6 faces bit-for-bit\n");
+}
+
+TEST(renderer_rejects_more_faces_than_it_has_slots) {
+  const Geometry g = Geometry::cube(32, 1.0f);
+  const int dup[2] = {1, 1};
+  CHECK(!g_r.init(g, dup, 2));   // the same face twice would be blitted twice
+  const int bad[1] = {99};
+  CHECK(!g_r.init(g, bad, 1));
+  int tooMany[kMaxRenderPanels + 1];
+  for (int i = 0; i <= kMaxRenderPanels; ++i) tooMany[i] = 0;
+  CHECK(!g_r.init(g, tooMany, kMaxRenderPanels + 1));
+  // Leave the shared renderer in a sane state for whatever runs next.
+  CHECK(g_r.init(g));
+}

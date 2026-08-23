@@ -11,10 +11,17 @@ class MatrixPanel_I2S_DMA;
 // internal SRAM and not, so faces are resolved and pushed one at a time.
 class PanelDriver {
  public:
-  // Panel count and size come from the geometry, never from constants here -- the same rule the
-  // browser frontend follows, and for the same reason: the physics and the display must not be
-  // able to disagree about how many faces there are or how big they are.
+  // Panel size comes from the geometry, never from constants here -- the same rule the browser
+  // frontend follows, and for the same reason: the physics and the display must not be able to
+  // disagree about how big a face is.
+  //
+  // Drives every panel in the geometry.
   bool begin(const partsim::Geometry& g, uint8_t depthBits, uint8_t brightness);
+
+  // Drives only the listed panels. A display node in a multi-node cube holds the full panel
+  // table for the physics but has DMA buffers for just its own faces.
+  bool begin(const partsim::Geometry& g, const int* panels, int count, uint8_t depthBits,
+             uint8_t brightness);
 
   // Resolves each face out of the renderer's accumulation buffers and pushes it to the chain,
   // then flips the DMA back buffer so a whole frame appears at once. Partial frames on an LED
@@ -38,7 +45,7 @@ class PanelDriver {
   bool allRunsHorizontal(const partsim::Geometry& g) const;
 
  private:
-  void blitFace(int panel, int w, int h);
+  void blitFace(int face, int w, int h);
 
   MatrixPanel_I2S_DMA* dma_ = nullptr;
   partsim::ChainMap chain_;

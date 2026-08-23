@@ -42,24 +42,37 @@ struct ChainRun {
 // transposed rotation, the two ways this table goes wrong.
 class ChainMap {
  public:
+  // Every panel in the geometry, with mounts[k] describing panel k.
+  //
   // Returns false on a malformed table: a slot out of range, two faces sharing a slot,
   // rotate > 3, or an odd rotation applied to a non-square panel.
   bool init(const Geometry& g, const FaceMount* mounts, int count);
 
+  // Only the listed panels, with mounts[i] describing panels[i]. This is a display node in a
+  // multi-node cube: it holds the whole panel table for the physics but drives two of the six
+  // faces, so its daisy chain is two tiles wide, not six.
+  bool init(const Geometry& g, const FaceMount* mounts, const int* panels, int count);
+
   int chainWidth() const { return chainW_; }
   int chainHeight() const { return chainH_; }
+  // How many faces this node drives -- NOT how many exist in the geometry.
   int count() const { return count_; }
-  const FaceMount& mount(int panel) const { return mounts_[panel]; }
 
-  // Live re-mount, for calibrating against the built object over serial. Returns false if the
-  // change would make the table invalid, leaving the old one in place.
-  bool setMount(int panel, FaceMount m);
+  // Indices below are DRIVEN-FACE indices in [0, count), not geometry panel indices. For a node
+  // that drives everything the two coincide, which is why the distinction did not exist before.
+  const FaceMount& mount(int face) const { return mounts_[face]; }
+  // Geometry panel index for driven face i, so the caller can fetch the right Panel/pixels.
+  int panelAt(int face) const { return (face >= 0 && face < count_) ? panelOf_[face] : -1; }
 
-  // Renderer texel (i, j) of `panel` -> chain pixel. Bounds are the caller's business; this
-  // is called per texel in the blit path.
-  void map(int panel, int i, int j, int& cx, int& cy) const;
+  // Live re-mount of a driven face, for calibrating against the built object over serial.
+  // Returns false if the change would make the table invalid, leaving the old one in place.
+  bool setMount(int face, FaceMount m);
 
-  ChainRun row(int panel, int j) const;
+  // Renderer texel (i, j) of driven face `face` -> chain pixel. Bounds are the caller's
+  // business; this is called per texel in the blit path.
+  void map(int face, int i, int j, int& cx, int& cy) const;
+
+  ChainRun row(int face, int j) const;
 
   // Straight-through mounts: face k in chain slot k, no rotation. The correct starting point
   // only because it is the arrangement to aim for when gluing -- expect to fix it up per face
@@ -70,6 +83,7 @@ class ChainMap {
   bool validate(const FaceMount* mounts, int count) const;
 
   FaceMount mounts_[kMaxPanels] = {};
+  int panelOf_[kMaxPanels] = {};
   uint16_t w_[kMaxPanels] = {};
   uint16_t h_[kMaxPanels] = {};
   int count_ = 0;

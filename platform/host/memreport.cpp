@@ -48,22 +48,36 @@ int main(int argc, char** argv) {
   const size_t accounted = particles + hash + field + renderer + geometry + solver;
   const size_t other = (sim > accounted) ? sim - accounted : 0;
 
-  const int chainW = 32 * kMaxPanels;
-  const size_t dma = hub75Bytes(chainW, 32, 6, true);
-  const size_t staging = 32 * 32 * 3;  // one face of RGB, reused across faces
+  // Panel side from the capacity, not a hardcoded 32: 1024 texels is a 32x32 tile, 4096 is 64x64.
+  // Everything below used to assume 32-row panels, which would have silently under-reported the
+  // DMA buffer by 4x on a 64x64 build -- the single largest number in this report.
+  int side = 1;
+  while ((side + 1) * (side + 1) <= kMaxPanelTexels) ++side;
+
+  // The chain THIS ROLE drives, which is the render-panel count -- not the number of panels that
+  // exist. A display node holding a six-panel table still owns a two-tile chain.
+  const int chainW = side * kMaxRenderPanels;
+  const size_t dma = hub75Bytes(chainW, side, 6, true);
+  const size_t staging = (size_t)kMaxPanelTexels * 3u;  // one face of RGB, reused across faces
   const size_t total = sim + dma + staging;
 
   std::printf("partsim static memory report\n");
   std::printf("  profile              : %s\n",
 #ifdef PARTSIM_PROFILE_ESP32
-              "esp32"
+              "esp32 (one node, six 32x32)"
+#elif defined(PARTSIM_PROFILE_ESP32_MASTER)
+              "esp32-master (physics, no panels)"
+#elif defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+              "esp32-display (two 64x64 faces)"
 #else
               "host/wasm"
 #endif
   );
   std::printf("  max particles        : %d\n", kMaxParticles);
   std::printf("  max panels           : %d\n", kMaxPanels);
-  std::printf("  max texels per panel : %d\n", kMaxPanelTexels);
+  std::printf("  max texels per panel : %d  (%dx%d)\n", kMaxPanelTexels, side, side);
+  std::printf("  panels rendered here : %d of %d\n", kMaxRenderPanels, kMaxPanels);
+  std::printf("  hub75 chain          : %dx%d\n", chainW, side);
   std::printf("  max grid cells       : %d\n", kMaxGridCells);
   std::printf("  max field cells      : %d\n", kMaxFieldCells);
   std::printf("  internal RGBA copy   : %s\n", PARTSIM_INTERNAL_PIXELS ? "yes" : "no");

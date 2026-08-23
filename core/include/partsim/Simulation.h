@@ -23,6 +23,16 @@ class Simulation {
  public:
   enum Mode : int { kCube = 0, kSinglePanel = 1 };
 
+  // Restrict rendering to a subset of faces, by panel index. Applied by the next init(); the
+  // panel TABLE is never trimmed, because Geometry::bounds() derives the container from it and
+  // every node in a multi-node cube must agree on that container exactly. Passing count 0 means
+  // simulate but render nothing, which is what the master node does.
+  //
+  // Default is every face, so a single-node build never has to call this.
+  void setRenderSet(const int* panels, int count);
+  void clearRenderSet() { renderSetCount_ = -1; }
+  int renderSetCount() const { return renderSetCount_; }
+
   bool init(int mode, int particleCount, uint32_t seed);
   // Loads a scene preset: refills particles, sets the palette, installs heat emitters.
   bool initScene(int mode, int sceneId, uint32_t seed);
@@ -69,9 +79,6 @@ class Simulation {
   // Exactly one physics step, for tests and the golden sequence.
   void stepFixed() { fixedStep(kFixedDt); }
 
-  // Renders with the accumulator's unconsumed time folded into the splat, so the picture keeps
-  // moving smoothly between physics steps rather than holding still and then jumping. Costs
-  // nothing: it is one multiply-add per particle inside a loop that already reads velocity.
   // Splat everything into the accumulation buffers without resolving colour. The ESP32 has no
   // room for an RGBA copy of all six panels, so the firmware calls this and then resolves each
   // face into one shared staging buffer. Identical splat path to render(), so the device and
@@ -82,6 +89,11 @@ class Simulation {
   }
 
 #if PARTSIM_INTERNAL_PIXELS
+  // Same, then resolve every driven face into the internal RGBA buffers.
+  //
+  // Both paths fold the accumulator's unconsumed time into the splat, so the picture keeps moving
+  // smoothly between physics steps rather than holding still and then jumping. That costs
+  // nothing: one multiply-add per particle, inside a loop that already reads velocity.
   void render() {
     renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
     renderer_.render(particles_, field_, geometry_);
@@ -129,6 +141,10 @@ class Simulation {
   FieldGrid field_;
   Renderer renderer_;
   float scratch_[kMaxParticles];
+
+  // -1 means "not set": render every panel. Otherwise the explicit subset.
+  int renderSet_[kMaxRenderPanels] = {0};
+  int renderSetCount_ = -1;
 
   Emitter emitters_[kMaxEmitters];
   int emitterCount_ = 0;

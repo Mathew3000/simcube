@@ -7,16 +7,24 @@
 using namespace partsim;
 
 bool PanelDriver::begin(const Geometry& g, uint8_t depthBits, uint8_t brightness) {
-  faces_ = g.count();
-  if (faces_ <= 0) return false;
-  const int panelW = (int)g.at(0).w;
-  const int panelH = (int)g.at(0).h;
+  int all[kMaxPanels];
+  const int n = g.count();
+  for (int k = 0; k < n && k < kMaxPanels; ++k) all[k] = k;
+  return begin(g, all, n, depthBits, brightness);
+}
+
+bool PanelDriver::begin(const Geometry& g, const int* panels, int count, uint8_t depthBits,
+                        uint8_t brightness) {
+  faces_ = count;
+  if (faces_ <= 0 || faces_ > kMaxPanels) return false;
+  const int panelW = (int)g.at(panels[0]).w;
+  const int panelH = (int)g.at(panels[0]).h;
   if (panelW * panelH * 3 > (int)sizeof(staging_)) return false;
 
   // Straight-through mounts to start with. Nothing else is knowable before the object exists;
   // the `mount` console command is how the real arrangement gets recorded.
   ChainMap::defaultMounts(faces_, mounts_);
-  if (!chain_.init(g, mounts_, faces_)) return false;
+  if (!chain_.init(g, mounts_, panels, faces_)) return false;
 
   HUB75_I2S_CFG::i2s_pins gpio = {pins::kR1, pins::kG1, pins::kB1, pins::kR2, pins::kG2,
                                   pins::kB2, pins::kA,  pins::kB,  pins::kC,  pins::kD,
@@ -54,14 +62,14 @@ void PanelDriver::clear() {
   if (dma_) dma_->clearScreen();
 }
 
-bool PanelDriver::allRunsHorizontal(const Geometry& g) const {
-  for (int p = 0; p < faces_ && p < g.count(); ++p) {
-    if (chain_.row(p, 0).dy != 0) return false;
+bool PanelDriver::allRunsHorizontal(const Geometry&) const {
+  for (int f = 0; f < chain_.count(); ++f) {
+    if (chain_.row(f, 0).dy != 0) return false;
   }
   return true;
 }
 
-void PanelDriver::blitFace(int panel, int w, int h) {
+void PanelDriver::blitFace(int face, int w, int h) {
   // Row by row rather than texel by texel in map(): row() hoists the mount arithmetic out of
   // the inner loop, so the per-pixel cost is one add and the driver call.
   //
@@ -71,7 +79,7 @@ void PanelDriver::blitFace(int panel, int w, int h) {
   // structure is here so a direct row write into the DMA buffer can replace it without
   // disturbing the mapping if that tenth is ever needed.
   for (int j = 0; j < h; ++j) {
-    const ChainRun run = chain_.row(panel, j);
+    const ChainRun run = chain_.row(face, j);
     const uint8_t* src = staging_ + (size_t)j * (size_t)w * 3u;
     int cx = run.cx, cy = run.cy;
     for (int i = 0; i < w; ++i) {
@@ -85,13 +93,16 @@ void PanelDriver::blitFace(int panel, int w, int h) {
 
 void PanelDriver::present(const Renderer& r, const Geometry& g) {
   if (!dma_) return;
-  const int n = (faces_ < g.count()) ? faces_ : g.count();
-  for (int p = 0; p < n; ++p) {
-    const Panel& pan = g.at(p);
+  for (int f = 0; f < chain_.count(); ++f) {
+    const int panel = chain_.panelAt(f);
+    const Panel& pan = g.at(panel);
     // Tight RGB, not RGBA: the alpha byte would be a third of the staging buffer and the panel
     // has nothing to do with it. Renderer::resolve serves both widths for exactly this reason.
-    r.resolve(p, staging_, 3);
-    blitFace(p, (int)pan.w, (int)pan.h);
+    //
+    // resolve() takes a PANEL index while blitFace takes a DRIVEN-FACE index. They coincide on a
+    // single-node cube and do not on a display node, which is why panelAt() exists.
+    r.resolve(panel, staging_, 3);
+    blitFace(f, (int)pan.w, (int)pan.h);
   }
   dma_->flipDMABuffer();
 }
@@ -104,11 +115,12 @@ void PanelDriver::testPattern(const Geometry& g) {
       {40, 0, 0}, {0, 40, 0}, {0, 0, 40}, {40, 40, 0}, {40, 0, 40}, {0, 40, 40},
   };
 
-  const int n = (faces_ < g.count()) ? faces_ : g.count();
-  for (int p = 0; p < n; ++p) {
-    const Panel& pan = g.at(p);
+  for (int f = 0; f < chain_.count(); ++f) {
+    const Panel& pan = g.at(chain_.panelAt(f));
     const int w = (int)pan.w, h = (int)pan.h;
-    const uint8_t* base = kFaceRgb[p % 6];
+    // Hue by the GEOMETRY panel, not the driven index, so face colours mean the same thing on
+    // every node -- otherwise each display node would start its palette again from red.
+    const uint8_t* base = kFaceRgb[chain_.panelAt(f) % 6];
 
     for (int j = 0; j < h; ++j) {
       uint8_t* dst = staging_ + (size_t)j * (size_t)w * 3u;
@@ -124,7 +136,7 @@ void PanelDriver::testPattern(const Geometry& g) {
         dst[0] = rr; dst[1] = gg; dst[2] = bb;
       }
     }
-    blitFace(p, w, h);
+    blitFace(f, w, h);
   }
   dma_->flipDMABuffer();
 }

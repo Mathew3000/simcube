@@ -17,9 +17,27 @@ inline uint16_t satAdd(uint16_t a, int b) {
 
 }  // namespace
 
-void Renderer::init(const Geometry& g) {
-  panels_ = g.count();
-  for (int i = 0; i < panels_; ++i) texels_[i] = (int)g.at(i).w * (int)g.at(i).h;
+bool Renderer::init(const Geometry& g) {
+  int all[kMaxPanels];
+  const int n = imin(g.count(), kMaxPanels);
+  for (int i = 0; i < n; ++i) all[i] = i;
+  return init(g, all, n);
+}
+
+bool Renderer::init(const Geometry& g, const int* panels, int count) {
+  for (int i = 0; i < kMaxPanels; ++i) slotOf_[i] = -1;
+  renderCount_ = 0;
+  if (count < 0 || count > kMaxRenderPanels) return false;
+
+  for (int s = 0; s < count; ++s) {
+    const int p = panels[s];
+    if (p < 0 || p >= g.count()) return false;
+    if (slotOf_[p] >= 0) return false;  // the same face listed twice would be blitted twice
+    slotOf_[p] = s;
+    panelOf_[s] = p;
+    texels_[s] = (int)g.at(p).w * (int)g.at(p).h;
+  }
+  renderCount_ = count;
   if (!palette_) palette_ = &paletteNaturalistic();
 
   // Depth attenuation: (1 - d/D)^2, so full brightness against the glass falling smoothly to
@@ -48,7 +66,7 @@ void Renderer::init(const Geometry& g) {
   // The radius arrives in WORLD units and is converted here, which is the only place that
   // conversion happens. Panels are required to share a pitch (a daisy chain of identical tiles
   // always does), so one LUT and one footprint serve all of them.
-  const float pitch = (panels_ > 0) ? length(g.at(0).u) : 1.0f;
+  const float pitch = (g.count() > 0) ? length(g.at(0).u) : 1.0f;
   const float rMax = kSplatRadiusWorld / pitch;  // texels
   footprint_ = imax(1, (int)rMax);
   kernelScale_ = (float)kKernelSize / (rMax * rMax);
@@ -60,10 +78,11 @@ void Renderer::init(const Geometry& g) {
   kernel_[kKernelSize] = 0;
 
   clear();
+  return true;
 }
 
 void Renderer::clear() {
-  for (int k = 0; k < panels_; ++k) {
+  for (int k = 0; k < renderCount_; ++k) {
     const int n = texels_[k] * kChannelCount;
     for (int i = 0; i < n; ++i) accum_[k][i] = 0;
   }
@@ -78,11 +97,14 @@ void Renderer::splat(const Particles& p, const Geometry& g) {
     const Vec3 q = (dtOff == 0.0f) ? p.pos(i) : p.pos(i) + p.vel(i) * dtOff;
     const int ch = channelOf(p.mat[i]);
 
-    // Brute force over panels. With at most 8 of them the rejection test is one dot product
-    // each, and any acceleration structure would cost more than it saves -- while also
-    // breaking the property that a particle in a corner correctly lights three faces.
-    for (int k = 0; k < panels_; ++k) {
-      const Panel& pan = g.at(k);
+    // Brute force over the panels this node drives. With at most 8 of them the rejection test is
+    // one dot product each, and any acceleration structure would cost more than it saves --
+    // while also breaking the property that a particle in a corner correctly lights three faces.
+    //
+    // Iterating the render set rather than the whole panel table is the entire saving on a
+    // display node: it tests two faces instead of six, per particle.
+    for (int k = 0; k < renderCount_; ++k) {
+      const Panel& pan = g.at(panelOf_[k]);
       const Vec3 d = q - pan.origin;
       const float dist = dot(d, pan.n);
       if (dist < 0.0f || dist >= kSplatInfluence) continue;
@@ -123,8 +145,10 @@ void Renderer::splat(const Particles& p, const Geometry& g) {
 }
 
 void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
-  const uint16_t* src = accum_[panel];
-  const int n = texels_[panel];
+  if (!rendersPanel(panel)) return;  // not ours to draw; leave the caller's buffer alone
+  const int slot = slotOf_[panel];
+  const uint16_t* src = accum_[slot];
+  const int n = texels_[slot];
   const Palette& pal = *palette_;
   const float toLevel = 255.0f / fullScale_;
   const bool fading = paletteB_ != nullptr && blend_ > 0.0f;
@@ -182,8 +206,8 @@ void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
         const Vec3 q = f.cellCentre(x, y, z);
         const float gain = (float)heat * (1.0f / 255.0f);
 
-        for (int k = 0; k < panels_; ++k) {
-          const Panel& pan = g.at(k);
+        for (int k = 0; k < renderCount_; ++k) {
+          const Panel& pan = g.at(panelOf_[k]);
           const Vec3 dd = q - pan.origin;
           const float dist = dot(dd, pan.n);
           if (dist < 0.0f || dist >= kHeatInfluence) continue;
@@ -229,7 +253,7 @@ void Renderer::accumulate(const Particles& p, const FieldGrid& f, const Geometry
 #if PARTSIM_INTERNAL_PIXELS
 void Renderer::render(const Particles& p, const FieldGrid& f, const Geometry& g) {
   accumulate(p, f, g);
-  for (int k = 0; k < panels_; ++k) resolve(k, pixels_[k], 4);
+  for (int k = 0; k < renderCount_; ++k) resolve(panelOf_[k], pixels_[k], 4);
 }
 #endif
 

@@ -3,26 +3,73 @@
 
 // Compile-time capacities. Defaults suit a host/WASM build; the ESP32 needs far smaller pools.
 //
-// The ESP32 numbers live HERE, selected by one -DPARTSIM_PROFILE_ESP32, rather than as a list of
-// -DPARTSIM_MAX_* in platformio.ini. Spelling them out in the build file would mean the host
-// verification and the firmware each carry their own copy of the budget, and the first time one
-// was edited the checks would quietly start measuring a configuration nobody ships.
-#ifdef PARTSIM_PROFILE_ESP32
+// The device numbers live HERE, selected by a single -DPARTSIM_PROFILE_* per role, rather than as
+// a list of -DPARTSIM_MAX_* in platformio.ini. Spelling them out in the build file would mean the
+// host verification and the firmware each carry their own copy of the budget, and the first time
+// one was edited the checks would quietly start measuring a configuration nobody ships.
+//
+// Three device roles, because a 64x64 cube cannot be driven by one board:
+//   PARTSIM_PROFILE_ESP32          one node, six 32x32 panels   (Milestone 2, still shipping)
+//   PARTSIM_PROFILE_ESP32_MASTER   physics + IMU, no panels     (Milestone 3)
+//   PARTSIM_PROFILE_ESP32_DISPLAY  two 64x64 faces of six       (Milestone 3, three of these)
 
+// --- shared by every device profile ------------------------------------------------------------
 // 1280 particles is a CPU limit, not a memory one. A bottom-up cycle count came to ~5500
 // cycles/particle/step, which at 240MHz and 30 FPS is about 1300 -- so a larger pool would
 // only buy RAM pressure in exchange for particles the processor cannot integrate anyway.
-#define PARTSIM_DEFAULT_MAX_PARTICLES 1280
-#define PARTSIM_DEFAULT_MAX_PANELS 6
-#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 1024  // 32x32
+//
+// This is the figure to revisit once the master stops splatting: on a multi-node cube the
+// render cost moves to the display nodes, so the master's step budget grows.
+#define PARTSIM_DEVICE_MAX_PARTICLES 1280
+#define PARTSIM_DEVICE_MAX_PANELS 6
 // 32-unit cube at kCellSize 3.0, plus the grid's padding: 12^3 with room to spare.
-#define PARTSIM_DEFAULT_MAX_GRID_CELLS 4096
+#define PARTSIM_DEVICE_MAX_GRID_CELLS 4096
 // 32-unit cube at kFieldCell 1.5: 22^3 = 10648, and the grid is ping-ponged, so this is the
-// single largest pool after the particles. Do not round it up generously.
-#define PARTSIM_DEFAULT_MAX_FIELD_CELLS 10648
+// single largest pool after the particles. Do not round it up generously. Note it is derived
+// from the WORLD size, so it does not grow with panel resolution.
+#define PARTSIM_DEVICE_MAX_FIELD_CELLS 10648
+
+#ifdef PARTSIM_PROFILE_ESP32
+
+// Single node driving all six 32x32 panels. This is the Milestone 2 configuration and it stays
+// valid: it is what the 32x32 panels currently in transit will be brought up on.
+#define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
+#define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 1024  // 32x32
+#define PARTSIM_DEFAULT_MAX_RENDER_PANELS 6    // it drives all of them
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
 // No internal RGBA copy of every panel: the firmware resolves one face at a time into a single
-// 3KB staging buffer and blits it. Six panels of RGBA is 24KB, which is the difference between
+// staging buffer and blits it. Six panels of RGBA is 24KB, which is the difference between
 // fitting internal SRAM and not.
+#define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
+
+#elif defined(PARTSIM_PROFILE_ESP32_MASTER)
+
+// Simulation master on a 64x64 cube: owns the IMU and the physics, drives no panels, and ships
+// state to the display nodes. Panel texels are still 4096 because it holds the FULL six-panel
+// geometry -- the container AABB has to be identical on every node, so the panel table is never
+// trimmed even though nothing is rendered from most of it.
+#define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
+#define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096  // 64x64
+// One render slot, not zero: enough for a diagnostic face, and the master has the memory spare.
+#define PARTSIM_DEFAULT_MAX_RENDER_PANELS 1
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
+#define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
+
+#elif defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+
+// Display node on a 64x64 cube: two faces of the six. Three of these plus one master cover the
+// cube. Two is not a preference -- three faces would need 144KB of DMA plus 73.8KB of
+// accumulation, which does not fit.
+#define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
+#define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096  // 64x64
+#define PARTSIM_DEFAULT_MAX_RENDER_PANELS 2
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
 
 #else
@@ -30,6 +77,7 @@
 #define PARTSIM_DEFAULT_MAX_PARTICLES 16384
 #define PARTSIM_DEFAULT_MAX_PANELS 8
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096
+#define PARTSIM_DEFAULT_MAX_RENDER_PANELS 8
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS 32768
 #define PARTSIM_DEFAULT_MAX_FIELD_CELLS 32768
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 1
@@ -44,6 +92,9 @@
 #endif
 #ifndef PARTSIM_MAX_PANEL_TEXELS
 #define PARTSIM_MAX_PANEL_TEXELS PARTSIM_DEFAULT_MAX_PANEL_TEXELS
+#endif
+#ifndef PARTSIM_MAX_RENDER_PANELS
+#define PARTSIM_MAX_RENDER_PANELS PARTSIM_DEFAULT_MAX_RENDER_PANELS
 #endif
 #ifndef PARTSIM_MAX_GRID_CELLS
 #define PARTSIM_MAX_GRID_CELLS PARTSIM_DEFAULT_MAX_GRID_CELLS
@@ -60,6 +111,14 @@ namespace partsim {
 constexpr int kMaxParticles = PARTSIM_MAX_PARTICLES;
 constexpr int kMaxPanels = PARTSIM_MAX_PANELS;
 constexpr int kMaxPanelTexels = PARTSIM_MAX_PANEL_TEXELS;
+// How many panels this process produces pixels for, which is NOT the same as how many panels
+// exist. On a multi-node cube every node holds the full panel table -- Geometry::bounds() must
+// yield an identical container on all of them -- while allocating accumulation buffers for only
+// the faces it physically drives. At 64x64 an accumulator is 24.6KB, so the difference between
+// 6 and 2 is 98KB on a node with 230KB to spend.
+constexpr int kMaxRenderPanels = PARTSIM_MAX_RENDER_PANELS;
+static_assert(kMaxRenderPanels >= 1, "at least one render slot; a renderless node still needs the array");
+static_assert(kMaxRenderPanels <= kMaxPanels, "cannot render more panels than exist");
 constexpr int kMaxGridCells = PARTSIM_MAX_GRID_CELLS;
 constexpr int kMaxFieldCells = PARTSIM_MAX_FIELD_CELLS;
 constexpr int kMaxEmitters = 4;

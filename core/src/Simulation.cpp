@@ -25,7 +25,12 @@ bool Simulation::init(int mode, int particleCount, uint32_t seed) {
   solver_.init();
   if (!field_.init(volume_)) return false;
   renderer_.setExposure(kSplatExposure);
-  renderer_.init(geometry_);
+  // A renderer that cannot serve this geometry is a configuration error, not a soft failure:
+  // it means the build's render capacity is smaller than the faces it was asked to drive, and
+  // the result would be silently unlit panels.
+  const bool rok = (renderSetCount_ < 0) ? renderer_.init(geometry_)
+                                         : renderer_.init(geometry_, renderSet_, renderSetCount_);
+  if (!rok) return false;
 
   particles_.clear();
   // A slab tolerates a much smaller share of its nominal capacity than a cube; overfilling
@@ -178,6 +183,12 @@ int Simulation::fill(int count, uint8_t material, uint32_t seed) {
 
 void Simulation::setOrientation(Quat q) {
   gravity_ = rotateByConjugate(q, Vec3{0.0f, -kGravityMag, 0.0f});
+}
+
+void Simulation::setRenderSet(const int* panels, int count) {
+  if (count < 0 || count > kMaxRenderPanels) return;
+  for (int i = 0; i < count; ++i) renderSet_[i] = panels[i];
+  renderSetCount_ = count;
 }
 
 void Simulation::fixedStep(float dt) {
