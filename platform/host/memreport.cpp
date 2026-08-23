@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 #include "partsim/Simulation.h"
 
@@ -57,8 +58,10 @@ int main(int argc, char** argv) {
   // The chain THIS ROLE drives, which is the render-panel count -- not the number of panels that
   // exist. A display node holding a six-panel table still owns a two-tile chain.
   const int chainW = side * kMaxRenderPanels;
-  const size_t dma = hub75Bytes(chainW, side, 6, true);
-  const size_t staging = (size_t)kMaxPanelTexels * 3u;  // one face of RGB, reused across faces
+  // Only charge for a DMA buffer if this role actually has a HUB75 connector. The master does not,
+  // and charging it 48KB for a chain it never drives overstated it by nearly 40%.
+  const size_t dma = PARTSIM_DRIVES_PANELS ? hub75Bytes(chainW, side, 6, true) : 0u;
+  const size_t staging = PARTSIM_DRIVES_PANELS ? (size_t)kMaxPanelTexels * 3u : 0u;
   const size_t total = sim + dma + staging;
 
   std::printf("partsim static memory report\n");
@@ -77,7 +80,8 @@ int main(int argc, char** argv) {
   std::printf("  max panels           : %d\n", kMaxPanels);
   std::printf("  max texels per panel : %d  (%dx%d)\n", kMaxPanelTexels, side, side);
   std::printf("  panels rendered here : %d of %d\n", kMaxRenderPanels, kMaxPanels);
-  std::printf("  hub75 chain          : %dx%d\n", chainW, side);
+  if (PARTSIM_DRIVES_PANELS) std::printf("  hub75 chain          : %dx%d\n", chainW, side);
+  else                       std::printf("  hub75 chain          : none (drives no panels)\n");
   std::printf("  max grid cells       : %d\n", kMaxGridCells);
   std::printf("  max field cells      : %d\n", kMaxFieldCells);
   std::printf("  internal RGBA copy   : %s\n", PARTSIM_INTERNAL_PIXELS ? "yes" : "no");
@@ -113,5 +117,28 @@ int main(int argc, char** argv) {
     }
     std::printf("  OK\n");
   }
+
+  // --- topology matrix ---------------------------------------------------------------------
+  // What a DISPLAY node costs per face count, with the DMA buffer internal or in PSRAM. This is
+  // the table the board decision turns on: how many HUB75 connectors one display board needs.
+  //
+  // Everything except the accumulator and the DMA buffer is shared regardless of face count --
+  // the particle state arrives whole over SPI because any particle can light any face.
+  std::printf("\n  display-node topology (64x64 faces, DMA 6-bit double-buffered)\n");
+  const size_t accumPerFace = (size_t)kMaxPanelTexels * kChannelCount * sizeof(uint16_t);
+  const size_t dmaPerFace = hub75Bytes(side, side, 6, true);
+  const size_t sharedRender = (size_t)kMaxPanelTexels * 3u        // staging, one face at a time
+                            + (size_t)kMaxParticles * 16u          // render-only particle state
+                            + (size_t)kMaxFieldCells               // heat, cur_ only
+                            + 2048u;                               // geometry + LUTs
+  std::printf("    %-6s %10s %10s %12s %12s\n", "faces", "accum", "dma", "internal", "internal");
+  std::printf("    %-6s %10s %10s %12s %12s\n", "", "", "", "dma inside", "dma in psram");
+  for (int f : {1, 2, 3, 6}) {
+    const double acc = (double)(accumPerFace * (size_t)f) / 1024.0;
+    const double dm = (double)(dmaPerFace * (size_t)f) / 1024.0;
+    const double sh = (double)sharedRender / 1024.0;
+    std::printf("    %-6d %8.1f K %8.1f K %10.1f K %10.1f K\n", f, acc, dm, acc + dm + sh, acc + sh);
+  }
+  std::printf("    shared regardless of face count: %.1f KB\n", (double)sharedRender / 1024.0);
   return 0;
 }

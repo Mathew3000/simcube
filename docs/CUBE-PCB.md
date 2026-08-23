@@ -21,10 +21,14 @@ Four boards, two designs:
 | `CUBE-MASTER` | 1 | physics, IMU, radio, battery, charging, power distribution. Drives no panels. |
 | `CUBE-DISPLAY` | 3 | two 64×64 faces each: receives particle state over SPI, splats, blits. |
 
-Why four boards rather than one: a 384×64 chain at 6-bit double-buffered needs **288 KB of DMA
-buffer** against 320 KB of total DRAM on an ESP32-S3, so one module physically cannot drive six
-64×64 panels. **[M]** Two faces per display node is likewise not a preference — three faces needs
-144 KB of DMA plus 73.8 KB of accumulation buffer, which does not fit. **[M]**
+Why four boards rather than one — **superseded, see [RESOURCES.md](RESOURCES.md) §1–2.** A 384×64
+chain at 6-bit double-buffered needs 288 KB of DMA buffer against ~230 KB of usable internal SRAM,
+so that configuration is impossible **[M]** — but moving the buffer to PSRAM removes the memory
+constraint entirely, and one display node driving all six faces then fits in 188.4 KB internal.
+**[M]** The remaining argument for splitting is blit cost (13.3 ms for six faces, 40 % of a 33 ms
+frame) and PSRAM contention, not memory. Board count is therefore an open decision; RESOURCES.md §2
+recommends a display board that can drive one to three panels per output so the layout does not
+foreclose it.
 
 Why distributed rather than one central PCB: HUB75 is 14 signals switching at 16 MHz and is
 visually unforgiving, while the inter-board SPI is 4 signals and tolerant of a longer run. Keeping
@@ -44,6 +48,7 @@ mount at their own panel pair, with ~10 cm ribbons instead of ~40 cm.
 | Runtime | ~2 h at brightness 96, auto-dimming below 20% charge |
 | Charging | USB-C PD sink, 20 V. **Charge or run, not both** — see §5.3 |
 | Distribution | Raw pack voltage (9.0–12.6 V) to the display boards; 5 V regulated **locally** |
+| Board count | **Open** — 1, 2 or 3 display boards. See [RESOURCES.md](RESOURCES.md) §2 |
 | Inter-board | SPI, master as host, 20 MHz, DMA, broadcast to all three at once |
 | Cube-to-cube | ESP-NOW, **master only** (beaker mode chaining) |
 
@@ -235,9 +240,10 @@ which is exactly when an ambient object would most like to be lit.
   Coriolis and centrifugal terms; an off-centre IMU adds a spurious centrifugal signal on top.
 - **REQ-M-4** SPI host: SCK, MOSI, MISO and **three individual CS lines**. Broadcast asserts all
   three CS at once, so one payload reaches all nodes; individual CS is for polling status on MISO.
-- **REQ-M-5** Drives no panels. Its ~140 KB of spare SRAM and its whole CPU budget are why the
-  radio and the physics can coexist here. **[M]** — measured 172.6 KB of 230 KB at the
-  `esp32-master` capacity profile.
+- **REQ-M-5** Drives no panels. Its spare SRAM and its whole CPU budget are why the radio and the
+  physics can coexist here — measured **112.6 KB of ~230 KB**, so ~117 KB spare. **[M]**
+  (An earlier revision said 172.6 KB; the report was charging the master a DMA buffer and a staging
+  buffer for a HUB75 chain it does not have.)
 - **REQ-M-6** USB-C for PD, USB2 console and JTAG on one connector.
 - **REQ-M-7** One button (mode/reset) and one RGB status LED, both firmware-defined.
 - **REQ-M-8** 3.3 V buck (not LDO) from pack voltage. An LDO dropping 11.1→3.3 V at 150 mA wastes
@@ -248,8 +254,12 @@ which is exactly when an ambient object would most like to be lit.
 ## 7. CUBE-DISPLAY (×3, identical)
 
 - **REQ-D-1** ESP32-S3-WROOM-1 N16R8. **No antenna requirement** — these boards never transmit.
-- **REQ-D-2** Two HUB75E connectors, wired as a daisy chain: board → face A → face B.
-- **REQ-D-3** 5 V synchronous buck, **≥8 A continuous**, input 9.0–12.6 V (see REQ-PWR-3).
+- **REQ-D-2** Two HUB75E connectors, each able to drive a chain of **one to three** panels, so the
+  same board serves a 1-, 2- or 3-board cube and the topology is chosen at bring-up rather than at
+  layout. Both connectors share all 14 HUB75 signals — panels chain, they do not each need a port.
+- **REQ-D-3** 5 V synchronous buck, input 9.0–12.6 V. **≥8 A** if the board is fixed at two
+  panels; **≥12 A** if it may drive up to six (the flexible layout in RESOURCES.md §2), which also
+  requires the APL cap to be enforced from boot. See REQ-PWR-3.
 - **REQ-D-4** 3.3 V buck for the module.
 - **REQ-D-5** ≥1000 µF of local bulk capacitance on the 5 V rail per panel, close to the
   connectors. Panel inrush at power-on is substantial and the harness has inductance.
@@ -409,13 +419,16 @@ Ordered by how much of the design they could invalidate.
 2. **Scan-logic baseline [A].** Assumed 1.5 W/panel. At the design case this is 9 W of 21.9 W — 41 %
    of panel power — so it matters more than its size suggests. Measure with all LEDs off.
 3. **Thermal.** REQ-THM-1 is a genuine unknown; ~10 W inside 1 L may need more than passive vents.
-4. **ESP-NOW versus panel EMF.** Putting a radio in this object was a reopened decision. The
+4. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether one display
+   board can drive all six faces. Requires the row-walking blit first — the per-pixel path does
+   147 456 scattered PSRAM accesses per frame at six faces and cannot work. RESOURCES.md §2.
+5. **ESP-NOW versus panel EMF.** Putting a radio in this object was a reopened decision. The
    master drives no panels so there is no DMA timing to disturb, but "a radio on a non-display node
    cannot disturb a display node" is reasonable and **unverified**. Measure display refresh with
    the radio transmitting.
-5. **Refresh rate at 128×64.** `S3_LCD_DIV_NUM=10` with `HZ_16M` measured 141 Hz on a 192×32 chain
+6. **Refresh rate at 128×64.** `S3_LCD_DIV_NUM=10` with `HZ_16M` measured 141 Hz on a 192×32 chain
    (6144 px). A 128×64 chain is 8192 px, so expect ~106 Hz and possibly a bump to `HZ_20M`.
-6. **Blit cost.** ~8192 `drawPixelRGB888` calls per node per frame at ~130 cycles each ≈ 4.4 ms,
+7. **Blit cost.** ~8192 `drawPixelRGB888` calls per node per frame at ~130 cycles each ≈ 4.4 ms,
    about 13 % of a 30 fps frame. Affordable; `ChainMap::row` exists so a direct DMA-buffer row
    write can replace it without disturbing the mapping.
-7. **Cell format.** 21700 at 70 mm is close to the 98 mm interior. Confirm against the real frame.
+8. **Cell format.** 21700 at 70 mm is close to the 98 mm interior. Confirm against the real frame.
