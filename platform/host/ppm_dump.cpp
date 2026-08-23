@@ -115,8 +115,8 @@ void dumpScene(int sceneId, int steps, float tiltDeg, const char* suffix) {
 
 int main(int argc, char** argv) {
   const int steps = (argc > 1) ? atoi(argv[1]) : 400;
-  std::printf("splat influence %.1f, footprint %d, exposure %.0f, heat gain %.0f\n",
-              kSplatInfluence, kSplatFootprint, kSplatExposure, kHeatGain);
+  std::printf("splat influence %.1f, blob radius %.2f world, exposure %.0f, heat gain %.0f\n",
+              kSplatInfluence, kSplatRadiusWorld, kSplatExposure, kHeatGain);
 
   for (int s = 0; s < sceneCount(); ++s) dumpScene(s, steps, 0.0f, "");
 

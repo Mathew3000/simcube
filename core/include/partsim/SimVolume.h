@@ -12,7 +12,7 @@ class SimVolume {
   // cellSize MUST be >= kSmoothRadius. If it is smaller, the 27-cell gather silently
   // misses neighbours, which shows up much later as inexplicable solver explosions rather
   // than as a search bug -- hence the hard check.
-  bool build(const Geometry& g, float slabDepthTexels, float cellSize);
+  bool build(const Geometry& g, float slabDepthWorld, float cellSize);
 
   const Aabb& box() const { return box_; }
   float cellSize() const { return cell_; }

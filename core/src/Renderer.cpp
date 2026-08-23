@@ -42,9 +42,15 @@ void Renderer::init(const Geometry& g) {
   }
   heatAtten_[kAttenSize] = 0;
 
-  // Radial kernel over squared distance in texels, out to the footprint edge. Gaussian-ish
-  // but forced to zero at the rim so the footprint really is bounded.
-  const float rMax = (float)kSplatFootprint + 0.5f;
+  // Radial kernel over squared distance in texels, out to the blob edge. Gaussian-ish but forced
+  // to zero at the rim so the footprint really is bounded.
+  //
+  // The radius arrives in WORLD units and is converted here, which is the only place that
+  // conversion happens. Panels are required to share a pitch (a daisy chain of identical tiles
+  // always does), so one LUT and one footprint serve all of them.
+  const float pitch = (panels_ > 0) ? length(g.at(0).u) : 1.0f;
+  const float rMax = kSplatRadiusWorld / pitch;  // texels
+  footprint_ = imax(1, (int)rMax);
   kernelScale_ = (float)kKernelSize / (rMax * rMax);
   for (int q = 0; q <= kKernelSize; ++q) {
     const float r2 = (float)q / kernelScale_;
@@ -84,10 +90,10 @@ void Renderer::splat(const Particles& p, const Geometry& g) {
       const float s = dot(d, pan.u) * pan.invU2;
       const float t = dot(d, pan.v) * pan.invV2;
 
-      const int i0 = imax(0, (int)s - kSplatFootprint);
-      const int i1 = imin((int)pan.w - 1, (int)s + kSplatFootprint);
-      const int j0 = imax(0, (int)t - kSplatFootprint);
-      const int j1 = imin((int)pan.h - 1, (int)t + kSplatFootprint);
+      const int i0 = imax(0, (int)s - footprint_);
+      const int i1 = imin((int)pan.w - 1, (int)s + footprint_);
+      const int j0 = imax(0, (int)t - footprint_);
+      const int j1 = imin((int)pan.h - 1, (int)t + footprint_);
       if (i0 > i1 || j0 > j1) continue;
 
       const int a = atten_[(int)(dist * attenScale_)];
@@ -184,10 +190,10 @@ void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
 
           const float s = dot(dd, pan.u) * pan.invU2;
           const float t = dot(dd, pan.v) * pan.invV2;
-          const int i0 = imax(0, (int)s - kSplatFootprint);
-          const int i1 = imin((int)pan.w - 1, (int)s + kSplatFootprint);
-          const int j0 = imax(0, (int)t - kSplatFootprint);
-          const int j1 = imin((int)pan.h - 1, (int)t + kSplatFootprint);
+          const int i0 = imax(0, (int)s - footprint_);
+          const int i1 = imin((int)pan.w - 1, (int)s + footprint_);
+          const int j0 = imax(0, (int)t - footprint_);
+          const int j1 = imin((int)pan.h - 1, (int)t + footprint_);
           if (i0 > i1 || j0 > j1) continue;
 
           const int a = heatAtten_[(int)(dist * heatAttenScale_)];

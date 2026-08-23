@@ -35,15 +35,19 @@ int Geometry::totalTexels() const {
   return n;
 }
 
-Aabb Geometry::bounds(float slabDepthTexels) const {
+Aabb Geometry::bounds(float slabDepthWorld) const {
   Aabb box = Aabb::empty();
   for (int i = 0; i < count_; ++i) {
     const Panel& p = panels_[i];
     const Vec3 du = p.u * (float)p.w;
     const Vec3 dv = p.v * (float)p.h;
     const Vec3 corners[4] = {p.origin, p.origin + du, p.origin + dv, p.origin + du + dv};
-    // Depth is in texels, and |u| == pitch, so scale by the pitch to reach world units.
-    const Vec3 push = p.n * (slabDepthTexels * length(p.u));
+    // Depth is in WORLD units, so it is used as-is. It used to be multiplied by the pitch on
+    // the grounds that it was a texel count -- which was invisible while pitch was exactly
+    // 1.0, and wrong the moment it was not: kSlabDepth is tuned in world units (a slab
+    // thinner than ~1.5h never settles), so at pitch 0.5 the scaling silently halved it into
+    // exactly the regime Config.h warns about.
+    const Vec3 push = p.n * slabDepthWorld;
     for (int c = 0; c < 4; ++c) {
       box.expand(corners[c]);
       box.expand(corners[c] + push);

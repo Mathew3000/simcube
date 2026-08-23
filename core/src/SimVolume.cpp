@@ -4,11 +4,11 @@
 
 namespace partsim {
 
-bool SimVolume::build(const Geometry& g, float slabDepthTexels, float cellSize) {
+bool SimVolume::build(const Geometry& g, float slabDepthWorld, float cellSize) {
   if (g.count() == 0) return false;
   if (cellSize < kSmoothRadius) return false;  // see the header comment; not negotiable
 
-  box_ = g.bounds(slabDepthTexels);
+  box_ = g.bounds(slabDepthWorld);
   cell_ = cellSize;
   invCell_ = 1.0f / cellSize;
 

@@ -60,13 +60,13 @@ class Geometry {
   int totalTexels() const;
 
   // The physical container. Union of every panel quad, each also pushed inward by
-  // slabDepthTexels so that a single flat panel gets a non-degenerate volume.
+  // slabDepthWorld (world units) so that a single flat panel gets a non-degenerate volume.
   //
   // Closed cube: the six quads already span the full box and the inward pushes land
   // strictly inside, so the result is exactly res^3.
   // Single panel: the quad alone is zero-thickness; the push gives it depth.
   // Deliberately NOT inflated -- padding belongs to the grid, not the container.
-  Aabb bounds(float slabDepthTexels) const;
+  Aabb bounds(float slabDepthWorld) const;
 
   // res^3 volume centred on the origin, six inward-facing panels.
   static Geometry cube(int res, float pitch);

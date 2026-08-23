@@ -280,3 +280,120 @@ TEST(palette_naturalistic_water_is_blue_and_fire_is_warm) {
   rampLookup(paletteNaturalistic().heat, 140, c);
   CHECK(c[0] > c[2]);
 }
+
+// --- pitch independence -------------------------------------------------------------------------
+// A particle is a physical object: its blob must be the same size in WORLD units whatever the
+// panel resolution. Before kSplatRadiusWorld existed, the footprint was a fixed 2 texels, so
+// doubling the resolution silently halved the blob and the fluid read as a spray of hard dots.
+// Nothing caught that, because every test hardcoded a 32-texel panel at pitch 1.0.
+
+namespace {
+
+// Lit texels and total intensity for one particle sitting `depth` inward from a face centre.
+struct Blob { int litTexels, total, footprint; };
+
+Blob blobFor(int res, float pitch, float depth) {
+  const Geometry g = Geometry::cube(res, pitch);
+  g_r.init(g);
+  const Panel& pan = g.at(0);
+  // Face centre, so the footprint is never clipped by the panel edge.
+  const Vec3 where = texelCenter(pan, res / 2, res / 2) + pan.n * depth;
+  g_p.clear();
+  g_p.add(where, Vec3{0, 0, 0}, kWater);
+  g_r.clear();
+  g_r.splat(g_p, g);
+
+  Blob b{0, 0, g_r.footprint()};
+  for (int j = 0; j < res; ++j)
+    for (int i = 0; i < res; ++i) {
+      const int v = (int)g_r.accumAt(0, i, j, res, kChWater);
+      if (v > 0) { ++b.litTexels; b.total += v; }
+    }
+  return b;
+}
+
+}  // namespace
+
+TEST(renderer_footprint_tracks_the_panel_pitch) {
+  // Both describe the SAME 32-unit world: 32 texels at pitch 1.0, or 64 at pitch 0.5.
+  const Blob coarse = blobFor(32, 1.0f, 2.0f);
+  const Blob fine = blobFor(64, 0.5f, 2.0f);
+
+  // The old hardcoded value, preserved exactly at pitch 1.0 so the golden hashes did not move.
+  CHECK(coarse.footprint == 2);
+  // Half the pitch, so twice the texel radius.
+  CHECK(fine.footprint == 5);
+  std::printf("       footprint %d texels at pitch 1.0, %d at pitch 0.5\n", coarse.footprint,
+              fine.footprint);
+}
+
+TEST(renderer_blob_covers_the_same_world_area_at_either_pitch) {
+  const Blob coarse = blobFor(32, 1.0f, 2.0f);
+  const Blob fine = blobFor(64, 0.5f, 2.0f);
+
+  // TOTAL deposited intensity scales with the texel count, because the kernel is a function of
+  // the radius NORMALISED by rMax -- so a texel at the same relative position in the blob gets
+  // the same value at either pitch, and there are simply four times as many of them.
+  const float totalRatio = (float)fine.total / (float)coarse.total;
+  std::printf("       total intensity %d -> %d (%.2fx, want ~4)\n", coarse.total, fine.total,
+              totalRatio);
+  CHECK(totalRatio > 3.4f);
+  CHECK(totalRatio < 4.6f);
+
+  // Lit texel count grows by rather LESS than 4x, and the reason is worth recording: the outer
+  // ring of the kernel is faint, and `contrib = (a * kernel) >> 6` rounds it to zero. At the
+  // finer pitch a larger share of the footprint sits in that faint ring, so proportionally more
+  // of it quantises away -- measured 3.3x rather than 4x. The visible consequence is a slightly
+  // harder blob edge at 64x64, which is a thing to look at rather than a thing to assert.
+  const float litRatio = (float)fine.litTexels / (float)coarse.litTexels;
+  std::printf("       lit texels %d -> %d (%.2fx; the shortfall is the >>6 tail)\n",
+              coarse.litTexels, fine.litTexels, litRatio);
+  CHECK(litRatio > 3.0f);
+  CHECK(litRatio < 4.4f);
+}
+
+// The constant this test exists to protect is kSplatExposure, and the answer is the opposite of
+// what it looks like.
+//
+// It is tempting to argue that a texel covering a quarter of the world area collects a quarter of
+// the light, so the exposure must drop 4x. That is true only if the footprint stays a fixed
+// number of TEXELS. Once the blob is a fixed WORLD size, the set of particles within reach of a
+// given texel is the same at either pitch, and each contributes the same kernel value -- so
+// per-texel accumulation is pitch-invariant and the exposure carries over untouched.
+TEST(renderer_peak_accumulation_is_pitch_invariant) {
+  // The same physical body of water, described once in world coordinates and splatted at both
+  // resolutions. Identical particles, so any difference is purely the renderer's.
+  auto fillTank = [] {
+    g_p.clear();
+    for (int z = 0; z < 14; ++z)
+      for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 14; ++x) {
+          const Vec3 at{-10.0f + (float)x * 1.5f, -15.0f + (float)y * 1.5f,
+                        -10.0f + (float)z * 1.5f};
+          g_p.add(at, Vec3{0, 0, 0}, kWater);
+        }
+  };
+
+  int peaks[2] = {0, 0};
+  const int res[2] = {32, 64};
+  const float pitch[2] = {1.0f, 0.5f};
+  for (int k = 0; k < 2; ++k) {
+    const Geometry g = Geometry::cube(res[k], pitch[k]);
+    g_r.init(g);
+    fillTank();
+    g_r.clear();
+    g_r.splat(g_p, g);
+    // Panel 4 is the bottom face, where a settled tank is densest.
+    peaks[k] = findPeak(g_r, 4, res[k], res[k], kChWater).value;
+  }
+
+  const float ratio = (float)peaks[1] / (float)peaks[0];
+  std::printf("       peak accumulation %d (pitch 1.0) -> %d (pitch 0.5) = %.2fx\n", peaks[0],
+              peaks[1], ratio);
+  std::printf("       kSplatExposure %.0f therefore carries over unchanged\n", kSplatExposure);
+  CHECK(peaks[0] > 0);
+  // Within 25%. If this ever drifts far from 1.0, kSplatExposure needs re-deriving and the
+  // reasoning in the comment above has stopped being true.
+  CHECK(ratio > 0.75f);
+  CHECK(ratio < 1.25f);
+}

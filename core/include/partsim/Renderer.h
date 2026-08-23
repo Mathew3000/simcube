@@ -70,6 +70,9 @@ class Renderer {
   const uint8_t* panelPixels(int i) const { return pixels_[i]; }
 #endif
   int panelCount() const { return panels_; }
+  // Kernel half-width in texels, derived from kSplatRadiusWorld and the pitch. Exposed so a test
+  // can assert it actually tracks the pitch rather than silently staying at its old value.
+  int footprint() const { return footprint_; }
 
   // Raw accumulated intensity, for tests.
   uint16_t accumAt(int panel, int i, int j, int w, int channel) const {
@@ -97,6 +100,9 @@ class Renderer {
   float attenScale_ = 1.0f;
   float heatAttenScale_ = 1.0f;
   float kernelScale_ = 1.0f;
+  // Kernel half-width in texels, derived from kSplatRadiusWorld and the panel pitch in init().
+  // At pitch 1.0 this is 2, the value it used to be hardcoded to.
+  int footprint_ = 2;
 
   uint16_t accum_[kMaxPanels][kMaxPanelTexels * kChannelCount];
 #if PARTSIM_INTERNAL_PIXELS

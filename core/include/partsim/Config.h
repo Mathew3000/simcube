@@ -124,7 +124,13 @@ constexpr float kSplatInfluence = 8.0f;  // depth beyond which a particle lights
 // could see a campfire at all. Fire is emissive and glows through the volume, so a reach that
 // spans the box is both cheaper to justify and what actually looks right.
 constexpr float kHeatInfluence = 24.0f;
-constexpr int kSplatFootprint = 2;       // kernel half-width in texels
+// Radius of a particle's blob, in WORLD units -- not texels. A particle is a physical thing, so
+// its apparent size must not change when the panel resolution does. The texel footprint is
+// derived from this and the panel pitch in Renderer::init.
+//
+// 2.5 is exactly the old texel-space value (a footprint of 2 plus the half-texel to the kernel's
+// zero crossing), so at pitch 1.0 this reproduces the previous behaviour bit-for-bit.
+constexpr float kSplatRadiusWorld = 2.5f;
 constexpr int kAttenLutSize = 64;
 // Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
 // water texel peaks around 6500 at these kernel constants, and setting this too low clips
