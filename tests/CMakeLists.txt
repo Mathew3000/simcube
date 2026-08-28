@@ -12,6 +12,7 @@ add_executable(partsim_tests
   test_motion.cpp
   test_chainmap.cpp
   test_device_loop.cpp
+  test_resolution.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
