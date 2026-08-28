@@ -111,7 +111,7 @@ TEST(resolution_changes_only_the_picture) {
     r.splat(g_p, g);
     for (int j = 0; j < res[k]; ++j)
       for (int i = 0; i < res[k]; ++i)
-        if (r.accumAt(4, i, j, res[k], kChWater) > 0) ++lit[k];
+        if (r.accumAt(4, i, j, kChWater) > 0) ++lit[k];
   }
   std::printf("       bottom face lit texels: %d at 32x32, %d at 64x64 (%.2fx)\n", lit[0], lit[1],
               (float)lit[1] / (float)lit[0]);

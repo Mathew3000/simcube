@@ -1,3 +1,4 @@
+#include <initializer_list>
 #include "check.h"
 #include "partsim/Renderer.h"
 
@@ -13,20 +14,26 @@ Particles g_p;
 // Peak-intensity texel on a panel, for the given channel.
 struct Peak { int i, j, value; };
 
-Peak findPeak(const Renderer& r, int panel, int w, int h, int channel) {
+// Width and height come from the RENDERER, not the caller. Passing them in was how a stale 32
+// could silently make a test check a quarter of a 64x64 face while still reporting green.
+Peak findPeak(const Renderer& r, int panel, int channel) {
   Peak best{-1, -1, 0};
+  const int w = r.panelWidth(panel);
+  const int h = w > 0 ? r.panelTexels(panel) / w : 0;
   for (int j = 0; j < h; ++j)
     for (int i = 0; i < w; ++i) {
-      const int v = (int)r.accumAt(panel, i, j, w, channel);
+      const int v = (int)r.accumAt(panel, i, j, channel);
       if (v > best.value) best = Peak{i, j, v};
     }
   return best;
 }
 
-int totalIntensity(const Renderer& r, int panel, int w, int h, int channel) {
+int totalIntensity(const Renderer& r, int panel, int channel) {
   int sum = 0;
+  const int w = r.panelWidth(panel);
+  const int h = w > 0 ? r.panelTexels(panel) / w : 0;
   for (int j = 0; j < h; ++j)
-    for (int i = 0; i < w; ++i) sum += (int)r.accumAt(panel, i, j, w, channel);
+    for (int i = 0; i < w; ++i) sum += (int)r.accumAt(panel, i, j, channel);
   return sum;
 }
 
@@ -45,13 +52,13 @@ TEST(renderer_single_particle_lands_on_the_predicted_texel) {
   g_r.clear();
   g_r.splat(g_p, g);
 
-  const Peak pk = findPeak(g_r, 0, 32, 32, kChWater);
+  const Peak pk = findPeak(g_r, 0, kChWater);
   CHECK(pk.i == 10);
   CHECK(pk.j == 20);
   CHECK(pk.value > 0);
   // It writes the water channel and nothing else.
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChSand) == 0);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChHeat) == 0);
+  CHECK(totalIntensity(g_r, 0, kChSand) == 0);
+  CHECK(totalIntensity(g_r, 0, kChHeat) == 0);
 }
 
 TEST(renderer_sand_uses_its_own_channel) {
@@ -62,8 +69,8 @@ TEST(renderer_sand_uses_its_own_channel) {
   g_p.add(texelCenter(pan, 5, 5) + pan.n * 1.0f, Vec3{0, 0, 0}, kSand);
   g_r.clear();
   g_r.splat(g_p, g);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChSand) > 0);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) == 0);
+  CHECK(totalIntensity(g_r, 0, kChSand) > 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) == 0);
 }
 
 TEST(renderer_falloff_has_compact_support) {
@@ -79,20 +86,20 @@ TEST(renderer_falloff_has_compact_support) {
   g_p.add(texelCenter(pan, 16, 16) + pan.n * (kSplatInfluence * 0.6f), Vec3{0, 0, 0}, kWater);
   g_r.clear();
   g_r.splat(g_p, g);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) > 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) > 0);
 
   g_p.clear();
   g_p.add(texelCenter(pan, 16, 16) + pan.n * (kSplatInfluence + 0.01f), Vec3{0, 0, 0}, kWater);
   g_r.clear();
   g_r.splat(g_p, g);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) == 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) == 0);
 
   // And exactly at the rim, also nothing -- the support is closed at the top.
   g_p.clear();
   g_p.add(texelCenter(pan, 16, 16) + pan.n * kSplatInfluence, Vec3{0, 0, 0}, kWater);
   g_r.clear();
   g_r.splat(g_p, g);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) == 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) == 0);
 }
 
 TEST(renderer_is_brighter_nearer_the_glass) {
@@ -106,7 +113,7 @@ TEST(renderer_is_brighter_nearer_the_glass) {
     g_p.add(texelCenter(pan, 16, 16) + pan.n * ((float)d + 0.01f), Vec3{0, 0, 0}, kWater);
     g_r.clear();
     g_r.splat(g_p, g);
-    const int t = totalIntensity(g_r, 0, 32, 32, kChWater);
+    const int t = totalIntensity(g_r, 0, kChWater);
     CHECK(t <= prev);  // monotonically dimmer with depth
     prev = t;
   }
@@ -122,7 +129,7 @@ TEST(renderer_particle_behind_a_panel_contributes_nothing) {
   g_p.add(texelCenter(pan, 16, 16) - pan.n * 1.0f, Vec3{0, 0, 0}, kWater);
   g_r.clear();
   g_r.splat(g_p, g);
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) == 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) == 0);
 }
 
 TEST(renderer_corner_particle_lights_three_panels) {
@@ -137,13 +144,13 @@ TEST(renderer_corner_particle_lights_three_panels) {
 
   int litPanels = 0;
   for (int k = 0; k < g.count(); ++k)
-    if (totalIntensity(g_r, k, 32, 32, kChWater) > 0) ++litPanels;
+    if (totalIntensity(g_r, k, kChWater) > 0) ++litPanels;
   CHECK(litPanels == 3);  // -Z, -X and -Y bottom
 
   // The three far faces see nothing at all.
-  CHECK(totalIntensity(g_r, 1, 32, 32, kChWater) == 0);  // +Z
-  CHECK(totalIntensity(g_r, 3, 32, 32, kChWater) == 0);  // +X
-  CHECK(totalIntensity(g_r, 5, 32, 32, kChWater) == 0);  // +Y
+  CHECK(totalIntensity(g_r, 1, kChWater) == 0);  // +Z
+  CHECK(totalIntensity(g_r, 3, kChWater) == 0);  // +X
+  CHECK(totalIntensity(g_r, 5, kChWater) == 0);  // +Y
 }
 
 TEST(renderer_centre_of_a_large_cube_lights_nothing) {
@@ -155,7 +162,7 @@ TEST(renderer_centre_of_a_large_cube_lights_nothing) {
   g_p.add(Vec3{0, 0, 0}, Vec3{0, 0, 0}, kWater);
   g_r.clear();
   g_r.splat(g_p, g);
-  for (int k = 0; k < g.count(); ++k) CHECK(totalIntensity(g_r, k, 32, 32, kChWater) == 0);
+  for (int k = 0; k < g.count(); ++k) CHECK(totalIntensity(g_r, k, kChWater) == 0);
 }
 
 TEST(renderer_clear_and_empty_scene_are_black) {
@@ -165,7 +172,7 @@ TEST(renderer_clear_and_empty_scene_are_black) {
   g_r.render(g_p, g_noFire, g);
   for (int k = 0; k < g.count(); ++k) {
     const uint8_t* px = g_r.panelPixels(k);
-    for (int i = 0; i < 32 * 32; ++i) {
+    for (int i = 0; i < g_r.panelTexels(4); ++i) {
       CHECK(px[i * 4 + 0] == 0);
       CHECK(px[i * 4 + 1] == 0);
       CHECK(px[i * 4 + 2] == 0);
@@ -186,13 +193,13 @@ TEST(renderer_resolve_rgb_and_rgba_agree) {
   g_r.clear();
   g_r.splat(g_p, g);
 
-  static uint8_t rgb[32 * 32 * 3];
-  static uint8_t rgba[32 * 32 * 4];
+  static uint8_t rgb[kMaxPanelTexels * 3];
+  static uint8_t rgba[kMaxPanelTexels * 4];
   g_r.resolve(4, rgb, 3);   // the -Y bottom face
   g_r.resolve(4, rgba, 4);
 
   int nonBlack = 0;
-  for (int i = 0; i < 32 * 32; ++i) {
+  for (int i = 0; i < g_r.panelTexels(4); ++i) {
     CHECK(rgb[i * 3 + 0] == rgba[i * 4 + 0]);
     CHECK(rgb[i * 3 + 1] == rgba[i * 4 + 1]);
     CHECK(rgb[i * 3 + 2] == rgba[i * 4 + 2]);
@@ -217,7 +224,7 @@ TEST(renderer_exposure_controls_brightness_without_clipping_to_white) {
     g_r.render(g_p, g_noFire, g);
     const uint8_t* px = g_r.panelPixels(4);
     double sum = 0.0;
-    for (int i = 0; i < 32 * 32; ++i)
+    for (int i = 0; i < g_r.panelTexels(4); ++i)
       sum += 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
     if (pass == 0) lumBright = sum / (32 * 32); else lumDim = sum / (32 * 32);
   }
@@ -306,7 +313,7 @@ Blob blobFor(int res, float pitch, float depth) {
   Blob b{0, 0, g_r.footprint()};
   for (int j = 0; j < res; ++j)
     for (int i = 0; i < res; ++i) {
-      const int v = (int)g_r.accumAt(0, i, j, res, kChWater);
+      const int v = (int)g_r.accumAt(0, i, j, kChWater);
       if (v > 0) { ++b.litTexels; b.total += v; }
     }
   return b;
@@ -384,7 +391,7 @@ TEST(renderer_peak_accumulation_is_pitch_invariant) {
     g_r.clear();
     g_r.splat(g_p, g);
     // Panel 4 is the bottom face, where a settled tank is densest.
-    peaks[k] = findPeak(g_r, 4, res[k], res[k], kChWater).value;
+    peaks[k] = findPeak(g_r, 4, kChWater).value;
   }
 
   const float ratio = (float)peaks[1] / (float)peaks[0];
@@ -416,11 +423,11 @@ TEST(renderer_subset_only_touches_its_own_faces) {
   g_r.clear();
   g_r.splat(g_p, g);
 
-  CHECK(totalIntensity(g_r, 0, 32, 32, kChWater) > 0);
-  CHECK(totalIntensity(g_r, 4, 32, 32, kChWater) > 0);
+  CHECK(totalIntensity(g_r, 0, kChWater) > 0);
+  CHECK(totalIntensity(g_r, 4, kChWater) > 0);
   // Panel 2 (-X) is also within reach of that corner, and must stay dark here -- accumAt reports
   // zero for an undriven face rather than reading someone else's slot.
-  CHECK(totalIntensity(g_r, 2, 32, 32, kChWater) == 0);
+  CHECK(totalIntensity(g_r, 2, kChWater) == 0);
 }
 
 TEST(renderer_subset_is_identical_to_the_full_render_on_its_own_faces) {
@@ -448,7 +455,7 @@ TEST(renderer_subset_is_identical_to_the_full_render_on_its_own_faces) {
     for (int j = 0; j < 32; ++j)
       for (int i = 0; i < 32; ++i)
         for (int c = 0; c < kChannelCount; ++c) {
-          const uint16_t v = g_r.accumAt(k, i, j, 32, c);
+          const uint16_t v = g_r.accumAt(k, i, j, c);
           h = fnv1a(&v, sizeof(v), h);
         }
     whole[k] = h;
@@ -467,7 +474,7 @@ TEST(renderer_subset_is_identical_to_the_full_render_on_its_own_faces) {
       for (int j = 0; j < 32; ++j)
         for (int i = 0; i < 32; ++i)
           for (int c = 0; c < kChannelCount; ++c) {
-            const uint16_t v = g_r.accumAt(k, i, j, 32, c);
+            const uint16_t v = g_r.accumAt(k, i, j, c);
             h = fnv1a(&v, sizeof(v), h);
           }
       CHECK(h == whole[k]);
@@ -487,4 +494,33 @@ TEST(renderer_rejects_more_faces_than_it_has_slots) {
   CHECK(!g_r.init(g, tooMany, kMaxRenderPanels + 1));
   // Leave the shared renderer in a sane state for whatever runs next.
   CHECK(g_r.init(g));
+}
+
+TEST(renderer_helpers_see_the_whole_face_at_either_resolution) {
+  // A demonstration that removing the width argument was worth it, not just tidier.
+  //
+  // The particle sits in the far corner of the face -- at 64x64 its texel is beyond column 32, so
+  // any read that assumed a width of 32 would land on the wrong row and never find it. Before the
+  // change this test could have been written with a stale literal and would have reported green
+  // while searching a quarter of the panel.
+  for (int res : {32, 64}) {
+    const Geometry g = Geometry::cube(res, pitchFor(res));
+    CHECK(g_r.init(g));
+    CHECK(g_r.panelWidth(0) == res);
+    CHECK(g_r.panelTexels(0) == res * res);
+
+    const Panel& pan = g.at(0);
+    const int far = res - 3;
+    const Vec3 where = texelCenter(pan, far, far) + pan.n * 1.5f;
+    g_p.clear();
+    g_p.add(where, Vec3{0, 0, 0}, kWater);
+    g_r.clear();
+    g_r.splat(g_p, g);
+
+    const Peak pk = findPeak(g_r, 0, kChWater);
+    std::printf("       res %d: peak at (%d,%d), expected (%d,%d)\n", res, pk.i, pk.j, far, far);
+    CHECK(pk.i == far);
+    CHECK(pk.j == far);
+    CHECK(pk.value > 0);
+  }
 }

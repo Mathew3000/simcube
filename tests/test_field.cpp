@@ -277,7 +277,7 @@ TEST(scene_transition_crossfades_the_palette) {
   auto floorPeak = [&]() {
     const uint8_t* px = g_sim.renderer().panelPixels(4);
     int best = -1, bi = 0;
-    for (int i = 0; i < 32 * 32; ++i) {
+    for (int i = 0; i < g_sim.renderer().panelTexels(4); ++i) {
       const int lum = px[i * 4] + px[i * 4 + 1] + px[i * 4 + 2];
       if (lum > best) { best = lum; bi = i; }
     }

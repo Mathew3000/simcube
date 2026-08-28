@@ -36,6 +36,7 @@ bool Renderer::init(const Geometry& g, const int* panels, int count) {
     slotOf_[p] = s;
     panelOf_[s] = p;
     texels_[s] = (int)g.at(p).w * (int)g.at(p).h;
+    width_[s] = (int)g.at(p).w;
   }
   renderCount_ = count;
   if (!palette_) palette_ = &paletteNaturalistic();

@@ -27,7 +27,7 @@ uint64_t accumHash(const Renderer& r, const Geometry& g) {
     for (int j = 0; j < (int)p.h; ++j)
       for (int i = 0; i < (int)p.w; ++i)
         for (int c = 0; c < kChannelCount; ++c) {
-          const uint16_t v = r.accumAt(k, i, j, (int)p.w, c);
+          const uint16_t v = r.accumAt(k, i, j, c);
           h = fnv1a(&v, sizeof(v), h);
         }
   }

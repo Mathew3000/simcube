@@ -107,10 +107,19 @@ class Renderer {
   int footprint() const { return footprint_; }
 
   // Raw accumulated intensity, for tests. Zero for a panel that is not driven here.
-  uint16_t accumAt(int panel, int i, int j, int w, int channel) const {
+  //
+  // The panel width used to be a caller-supplied argument, which was a quiet trap: a stale literal
+  // meant the read silently landed on the wrong texel and the test carried on passing while
+  // checking a fraction of the face. The renderer knows the width, so it uses its own.
+  uint16_t accumAt(int panel, int i, int j, int channel) const {
     if (!rendersPanel(panel)) return 0;
-    return accum_[slotOf_[panel]][(j * w + i) * kChannelCount + channel];
+    const int slot = slotOf_[panel];
+    return accum_[slot][(j * width_[slot] + i) * kChannelCount + channel];
   }
+
+  // Texels and width of a driven panel, so a caller iterating pixels never has to assume either.
+  int panelTexels(int panel) const { return rendersPanel(panel) ? texels_[slotOf_[panel]] : 0; }
+  int panelWidth(int panel) const { return rendersPanel(panel) ? width_[slotOf_[panel]] : 0; }
 
  private:
   static constexpr int kAttenSize = 64;
@@ -124,6 +133,7 @@ class Renderer {
   int slotOf_[kMaxPanels];
   int panelOf_[kMaxRenderPanels];
   int texels_[kMaxRenderPanels] = {0};
+  int width_[kMaxRenderPanels] = {0};
   float fullScale_ = 900.0f;
   float timeOffset_ = 0.0f;
 

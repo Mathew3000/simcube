@@ -156,7 +156,7 @@ TEST(sim_render_produces_lit_panels) {
   for (int k = 0; k < g_sim.geometry().count(); ++k) {
     const uint8_t* px = g_sim.renderer().panelPixels(k);
     bool any = false;
-    for (int i = 0; i < 32 * 32 && !any; ++i)
+    for (int i = 0; i < g_sim.renderer().panelTexels(k) && !any; ++i)
       if (px[i * 4] || px[i * 4 + 1] || px[i * 4 + 2]) any = true;
     if (any) ++lit;
   }
@@ -176,14 +176,14 @@ TEST(sim_render_interpolation_moves_the_splat_not_the_state) {
   g_sim.renderer().setTimeOffset(0.0f);
   g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
   uint64_t plain = 0;
-  for (int k = 0; k < 6; ++k) plain = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, plain);
+  for (int k = 0; k < 6; ++k) plain = fnv1a(g_sim.renderer().panelPixels(k), (size_t)g_sim.renderer().panelTexels(k) * 4u, plain);
 
   // Splat a full frame ahead. Something must change, or the offset is being ignored.
   g_sim.renderer().setTimeOffset(kFixedDt * 3.0f);
   g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
   uint64_t shifted = 0;
   for (int k = 0; k < 6; ++k)
-    shifted = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, shifted);
+    shifted = fnv1a(g_sim.renderer().panelPixels(k), (size_t)g_sim.renderer().panelTexels(k) * 4u, shifted);
 
   CHECK(g_sim.stateHash() == before);  // rendering did not disturb the physics
   CHECK(plain != shifted);             // and the offset actually did something
@@ -200,12 +200,12 @@ TEST(sim_interpolation_is_off_for_a_settled_fluid) {
   g_sim.renderer().setTimeOffset(0.0f);
   g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
   uint64_t a = 0;
-  for (int k = 0; k < 6; ++k) a = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, a);
+  for (int k = 0; k < 6; ++k) a = fnv1a(g_sim.renderer().panelPixels(k), (size_t)g_sim.renderer().panelTexels(k) * 4u, a);
 
   g_sim.renderer().setTimeOffset(kFixedDt);
   g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());
   uint64_t b = 0;
-  for (int k = 0; k < 6; ++k) b = fnv1a(g_sim.renderer().panelPixels(k), 32 * 32 * 4, b);
+  for (int k = 0; k < 6; ++k) b = fnv1a(g_sim.renderer().panelPixels(k), (size_t)g_sim.renderer().panelTexels(k) * 4u, b);
 
   CHECK(a == b);
   g_sim.renderer().setTimeOffset(0.0f);
