@@ -38,6 +38,7 @@
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 1024  // 32x32
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 6    // it drives all of them
 #define PARTSIM_DEFAULT_DRIVES_PANELS 1
+#define PARTSIM_DEFAULT_RUNS_SOLVER 1
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
 #define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
 // No internal RGBA copy of every panel: the firmware resolves one face at a time into a single
@@ -57,6 +58,7 @@
 // One render slot, not zero: enough for a diagnostic face, and the master has the memory spare.
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 1
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
+#define PARTSIM_DEFAULT_RUNS_SOLVER 1
 #define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
 // No HUB75 connector at all. Stated rather than implied by the render slot count, because the
@@ -72,6 +74,9 @@
 #define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096  // 64x64
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 2
+// A display node receives state and draws it -- it never integrates. So it carries RenderState's
+// draw-only containers instead of a Simulation, which is what brings it inside the SRAM budget.
+#define PARTSIM_DEFAULT_RUNS_SOLVER 0
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
 #define PARTSIM_DEFAULT_MAX_FIELD_CELLS PARTSIM_DEVICE_MAX_FIELD_CELLS
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
@@ -84,6 +89,7 @@
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 8
 #define PARTSIM_DEFAULT_DRIVES_PANELS 0
+#define PARTSIM_DEFAULT_RUNS_SOLVER 1
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS 32768
 #define PARTSIM_DEFAULT_MAX_FIELD_CELLS 32768
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 1
@@ -113,6 +119,9 @@
 #endif
 #ifndef PARTSIM_DRIVES_PANELS
 #define PARTSIM_DRIVES_PANELS PARTSIM_DEFAULT_DRIVES_PANELS
+#endif
+#ifndef PARTSIM_RUNS_SOLVER
+#define PARTSIM_RUNS_SOLVER PARTSIM_DEFAULT_RUNS_SOLVER
 #endif
 
 namespace partsim {

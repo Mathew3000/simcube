@@ -3,6 +3,7 @@
 #include "partsim/Palette.h"
 #include "partsim/Particles.h"
 #include "partsim/Geometry.h"
+#include "partsim/RenderState.h"
 
 namespace partsim {
 
@@ -66,7 +67,10 @@ class Renderer {
   // clear -> splat particles -> splat heat. Stops short of resolving, so a caller with no room
   // for a second full copy of the panels can resolve one face at a time into its own buffer.
   // This is the ESP32 path; render() below is this plus the resolve loop.
-  void accumulate(const Particles& p, const FieldGrid& f, const Geometry& g);
+  void accumulate(ParticleView p, HeatView f, const Geometry& g);
+  void accumulate(const Particles& p, const FieldGrid& f, const Geometry& g) {
+    accumulate(p.view(), f.view(), g);
+  }
 
 #if PARTSIM_INTERNAL_PIXELS
   // clear -> splat particles -> splat heat -> resolve every panel into the RGBA buffers.
@@ -74,10 +78,17 @@ class Renderer {
 #endif
 
   void clear();
-  void splat(const Particles& p, const Geometry& g);
+
+  // Both splat entry points take a VIEW rather than the owning type, so one implementation serves
+  // a full simulation and a draw-only display node alike. See RenderState.h.
+  void splat(ParticleView p, const Geometry& g);
   // Heat cells splat through the SAME path as particles, into the heat channel, so flame and
   // fluid composite consistently and the palette stays the only place colour is decided.
-  void splatField(const FieldGrid& f, const Geometry& g);
+  void splatField(HeatView f, const Geometry& g);
+
+  // Convenience overloads for callers holding the full types. Thin adapters, not a second path.
+  void splat(const Particles& p, const Geometry& g) { splat(p.view(), g); }
+  void splatField(const FieldGrid& f, const Geometry& g) { splatField(f.view(), g); }
   // bytesPerTexel: 3 for tight RGB (LED panels), 4 for RGBA (WebGL wants alignment 4).
   void resolve(int panel, uint8_t* out, int bytesPerTexel) const;
 

@@ -35,7 +35,9 @@ build_profile() {
 must_fit() {
   local prof="$1" dir="build-$1"
   build_profile "$prof" "$dir" || { status=1; return; }
-  if "$dir/platform/host/partsim_memreport" "$BUDGET_KB" | tail -3 | sed "s/^/  [$prof] /"; then
+  # grep the verdict lines specifically, not tail -- the report ends with a topology matrix now.
+  if "$dir/platform/host/partsim_memreport" "$BUDGET_KB" \
+       | grep -E "TOTAL internal SRAM|^  budget|^  OK|^  FAIL" | sed "s/^/  [$prof] /"; then
     :
   else
     echo "FAIL: $prof does not fit ${BUDGET_KB}KB"
@@ -51,7 +53,7 @@ known_over() {
   if "$dir/platform/host/partsim_memreport" "$BUDGET_KB" >/dev/null 2>&1; then
     echo "  [$prof] NOW FITS ${BUDGET_KB}KB -- promote this to must_fit in $0"
   else
-    "$dir/platform/host/partsim_memreport" | tail -2 | sed "s/^/  [$prof] /"
+    "$dir/platform/host/partsim_memreport" | grep -E "TOTAL internal SRAM" | sed "s/^/  [$prof] /"
     echo "  [$prof] EXPECTED over ${BUDGET_KB}KB: $reason"
   fi
 }
@@ -59,12 +61,12 @@ known_over() {
 must_fit esp32
 must_fit esp32-master
 
-# The display node carries a whole Simulation today, and 55.7KB of that is state it never uses:
-# the full Particles pool including the solver's predicted positions and lambdas (31.3KB), the
-# heat field's ping-pong second buffer (10.3KB), the neighbour grid it never builds (10.5KB) and
-# the solver scratch (3.6KB). A render-only state container removes all of it and brings the node
-# to ~190KB. Until then this genuinely does not fit, and saying so beats a green tick.
-known_over esp32-display "needs the render-only state container; carries ~55.7KB of solver state it never uses"
+# The display node fitted only once RenderState existed. It used to carry a whole Simulation, and
+# 55.7KB of that was state it never touches: the solver's predicted positions and lambdas, the heat
+# field's ping-pong second buffer, a neighbour grid it never builds and the sort scratch. Now it
+# carries RenderParticles + HeatBuffer instead -- 25.0 B/particle against 49.4 -- and lands at
+# 198.3KB. This was a known_over until then; it is a hard check now.
+must_fit esp32-display
 
 # The esp32 profile's hash is the reference the DEVICE must reproduce.
 have="$("$ROOT/build-esp32/platform/host/partsim_golden" -q)"

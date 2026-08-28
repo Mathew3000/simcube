@@ -61,6 +61,10 @@ struct Particles {
     mat[i] = mat[last];
   }
 
+  // Read-only view for the renderer. Lets one splat implementation serve both a full simulation
+  // and a draw-only node; see RenderState.h.
+  struct ParticleView view() const;
+
   Vec3 pos(int i) const { return Vec3{x[i], y[i], z[i]}; }
   Vec3 vel(int i) const { return Vec3{vx[i], vy[i], vz[i]}; }
   Vec3 pred(int i) const { return Vec3{sx[i], sy[i], sz[i]}; }

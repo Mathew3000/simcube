@@ -88,13 +88,14 @@ void Renderer::clear() {
   }
 }
 
-void Renderer::splat(const Particles& p, const Geometry& g) {
+void Renderer::splat(ParticleView p, const Geometry& g) {
   const int n = p.n;
   const float dtOff = timeOffset_;
   for (int i = 0; i < n; ++i) {
     // Extrapolate along the particle's own velocity. Only the splat moves; the simulation state
     // is untouched, so this can never feed back into the physics.
-    const Vec3 q = (dtOff == 0.0f) ? p.pos(i) : p.pos(i) + p.vel(i) * dtOff;
+    const Vec3 pos{p.x[i], p.y[i], p.z[i]};
+    const Vec3 q = (dtOff == 0.0f) ? pos : pos + Vec3{p.vx[i], p.vy[i], p.vz[i]} * dtOff;
     const int ch = channelOf(p.mat[i]);
 
     // Brute force over the panels this node drives. With at most 8 of them the rejection test is
@@ -193,10 +194,10 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
   }
 }
 
-void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
-  if (f.empty()) return;  // nothing burning: whole pass skipped
+void Renderer::splatField(HeatView f, const Geometry& g) {
+  if (f.empty) return;  // nothing burning: whole pass skipped
 
-  const IVec3 d = f.dim();
+  const IVec3 d = f.dim;
   for (int z = 0; z < d.z; ++z) {
     for (int y = 0; y < d.y; ++y) {
       for (int x = 0; x < d.x; ++x) {
@@ -244,7 +245,7 @@ void Renderer::splatField(const FieldGrid& f, const Geometry& g) {
   }
 }
 
-void Renderer::accumulate(const Particles& p, const FieldGrid& f, const Geometry& g) {
+void Renderer::accumulate(ParticleView p, HeatView f, const Geometry& g) {
   clear();
   splat(p, g);
   splatField(f, g);

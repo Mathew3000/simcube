@@ -45,6 +45,10 @@ class FieldGrid {
   // Trilinear sample in world space, 0..1. Used by the renderer.
   float sample(Vec3 world) const;
 
+  // Read-only view for the renderer, so the splat path is identical whether the heat was advected
+  // here or arrived over a wire. Defined in RenderState.cpp to keep this header free of it.
+  struct HeatView view() const;
+
  private:
   float sampleCur(float fx, float fy, float fz) const;
 

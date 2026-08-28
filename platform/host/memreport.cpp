@@ -11,6 +11,7 @@
 #include <cstring>
 #include <initializer_list>
 
+#include "partsim/RenderState.h"
 #include "partsim/Simulation.h"
 
 using namespace partsim;
@@ -62,7 +63,15 @@ int main(int argc, char** argv) {
   // and charging it 48KB for a chain it never drives overstated it by nearly 40%.
   const size_t dma = PARTSIM_DRIVES_PANELS ? hub75Bytes(chainW, side, 6, true) : 0u;
   const size_t staging = PARTSIM_DRIVES_PANELS ? (size_t)kMaxPanelTexels * 3u : 0u;
-  const size_t total = sim + dma + staging;
+
+  // A role that does not run the solver carries RenderState's draw-only containers instead of a
+  // whole Simulation. Reporting sizeof(Simulation) for it would measure 55.7KB of pools the node
+  // never touches -- which is precisely the mistake that made a display node look 14.6KB over
+  // budget when it is in fact comfortably inside.
+  const size_t drawOnly = sizeof(RenderParticles) + sizeof(HeatBuffer) + sizeof(Renderer)
+                        + sizeof(Geometry);
+  const size_t stateTotal = PARTSIM_RUNS_SOLVER ? sim : drawOnly;
+  const size_t total = stateTotal + dma + staging;
 
   std::printf("partsim static memory report\n");
   std::printf("  profile              : %s\n",
@@ -85,16 +94,28 @@ int main(int argc, char** argv) {
   std::printf("  max grid cells       : %d\n", kMaxGridCells);
   std::printf("  max field cells      : %d\n", kMaxFieldCells);
   std::printf("  internal RGBA copy   : %s\n", PARTSIM_INTERNAL_PIXELS ? "yes" : "no");
+  std::printf("  runs the solver      : %s\n", PARTSIM_RUNS_SOLVER ? "yes" : "no (draws only)");
   std::printf("\n");
 
-  row("Particles (SoA pool)", particles, total);
-  row("SpatialHash (sort+grid)", hash, total);
-  row("FieldGrid (heat, x2)", field, total);
-  row("Renderer (accum+pixels)", renderer, total);
-  row("Geometry", geometry, total);
-  row("Solver", solver, total);
-  row("Simulation, other", other, total);
-  std::printf("  %-26s %8zu B  %6.1f KB\n", "-- Simulation total", sim, (double)sim / 1024.0);
+  if (PARTSIM_RUNS_SOLVER) {
+    row("Particles (SoA pool)", particles, total);
+    row("SpatialHash (sort+grid)", hash, total);
+    row("FieldGrid (heat, x2)", field, total);
+    row("Renderer (accum+pixels)", renderer, total);
+    row("Geometry", geometry, total);
+    row("Solver", solver, total);
+    row("Simulation, other", other, total);
+    std::printf("  %-26s %8zu B  %6.1f KB\n", "-- Simulation total", sim, (double)sim / 1024.0);
+  } else {
+    row("RenderParticles (draw-only)", sizeof(RenderParticles), total);
+    row("HeatBuffer (single)", sizeof(HeatBuffer), total);
+    row("Renderer (accum+pixels)", renderer, total);
+    row("Geometry", geometry, total);
+    std::printf("  %-26s %8zu B  %6.1f KB\n", "-- draw-only total", drawOnly,
+                (double)drawOnly / 1024.0);
+    std::printf("  %-26s %8zu B  %6.1f KB  (never instantiated here)\n", "   a full Simulation",
+                sim, (double)sim / 1024.0);
+  }
   std::printf("\n");
   row("HUB75 DMA (6bit, double)", dma, total);
   row("one-face RGB staging", staging, total);
@@ -127,10 +148,13 @@ int main(int argc, char** argv) {
   std::printf("\n  display-node topology (64x64 faces, DMA 6-bit double-buffered)\n");
   const size_t accumPerFace = (size_t)kMaxPanelTexels * kChannelCount * sizeof(uint16_t);
   const size_t dmaPerFace = hub75Bytes(side, side, 6, true);
+  // Real sizeofs now that RenderState exists, rather than the 16 B/particle estimate this used
+  // to carry. Floats, not the wire's int16/int8: dequantising once at decode beats doing it per
+  // panel inside the splat loop, and it keeps one splat implementation for both roles.
   const size_t sharedRender = (size_t)kMaxPanelTexels * 3u        // staging, one face at a time
-                            + (size_t)kMaxParticles * 16u          // render-only particle state
-                            + (size_t)kMaxFieldCells               // heat, cur_ only
-                            + 2048u;                               // geometry + LUTs
+                            + sizeof(RenderParticles)             // draw-only particle state
+                            + sizeof(HeatBuffer)                  // heat, single buffer
+                            + sizeof(Geometry);
   std::printf("    %-6s %10s %10s %12s %12s\n", "faces", "accum", "dma", "internal", "internal");
   std::printf("    %-6s %10s %10s %12s %12s\n", "", "", "", "dma inside", "dma in psram");
   for (int f : {1, 2, 3, 6}) {
@@ -139,6 +163,12 @@ int main(int argc, char** argv) {
     const double sh = (double)sharedRender / 1024.0;
     std::printf("    %-6d %8.1f K %8.1f K %10.1f K %10.1f K\n", f, acc, dm, acc + dm + sh, acc + sh);
   }
-  std::printf("    shared regardless of face count: %.1f KB\n", (double)sharedRender / 1024.0);
+  std::printf("    shared regardless of face count: %.1f KB", (double)sharedRender / 1024.0);
+  std::printf("  (RenderParticles %.1f + HeatBuffer %.1f + staging %.1f + geometry %.1f)\n",
+              sizeof(RenderParticles) / 1024.0, sizeof(HeatBuffer) / 1024.0,
+              kMaxPanelTexels * 3 / 1024.0, sizeof(Geometry) / 1024.0);
+  std::printf("    %.1f B/particle draw-only, against %.1f B/particle for the solver pools\n",
+              (double)sizeof(RenderParticles) / kMaxParticles,
+              (double)(sizeof(Particles) + sizeof(SpatialHash)) / kMaxParticles);
   return 0;
 }

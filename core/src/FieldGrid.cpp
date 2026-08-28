@@ -1,11 +1,9 @@
 #include "partsim/FieldGrid.h"
 
+#include "partsim/RenderState.h"
+
 namespace partsim {
 namespace {
-
-// Field resolution relative to the neighbour grid. Half the smoothing radius gives a plume
-// enough shape to read as flame without costing much: a 32-unit cube becomes 22^3 cells.
-constexpr float kFieldCell = kSmoothRadius * 0.5f;
 
 // Buoyancy in world units per second, opposite gravity.
 constexpr float kBuoyancy = 30.0f;
@@ -18,21 +16,16 @@ constexpr float kCoolPerSecond = 0.03f;
 constexpr float kSwirl = 7.0f;
 constexpr float kSwirlSpeed = 1.7f;
 
-inline int ceilDiv(float a, float b) {
-  const float q = a / b;
-  const int i = (int)q;
-  return (q > (float)i) ? i + 1 : i;
-}
-
 }  // namespace
 
 bool FieldGrid::init(const SimVolume& v) {
   lo_ = v.box().lo;
-  cell_ = kFieldCell;
+  // Shared with HeatBuffer, deliberately. A display node receiving this field over the wire must
+  // agree byte for byte about the grid layout, and two independent copies of the derivation would
+  // fail silently -- as a plume drawn in the wrong place, not as an error.
+  cell_ = heatCellSize();
   invCell_ = 1.0f / cell_;
-  const Vec3 s = v.box().size();
-  dim_ = IVec3{imax(1, ceilDiv(s.x, cell_)), imax(1, ceilDiv(s.y, cell_)),
-               imax(1, ceilDiv(s.z, cell_))};
+  dim_ = heatGridDim(v, cell_);
   cellCount_ = dim_.x * dim_.y * dim_.z;
   if (cellCount_ > kMaxFieldCells) return false;
   clear();
