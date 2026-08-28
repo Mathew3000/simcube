@@ -72,6 +72,9 @@ struct {
 
 volatile bool g_paused = false;
 volatile bool g_showTestPattern = false;
+// Frames that missed their deadline. Reported by `r`, because a device silently running at half
+// rate is worth knowing about.
+volatile uint32_t g_overruns = 0;
 
 // ------------------------------------------------------------------------------------------------
 
@@ -123,7 +126,9 @@ void simTask(void*) {
 
   for (;;) {
     if (g_showTestPattern) {
+#if !PARTSIM_QEMU
       g_panels.testPattern(g_sim.geometry());
+#endif
       g_showTestPattern = false;
       vTaskDelayUntil(&next, period);
       continue;
@@ -145,7 +150,9 @@ void simTask(void*) {
     const uint32_t t1 = micros();
     g_sim.accumulate();
     const uint32_t t2 = micros();
+#if !PARTSIM_QEMU
     g_panels.present(g_sim.renderer(), g_sim.geometry());
+#endif
     const uint32_t t3 = micros();
 
     // Exponential smoothing, so the console shows a readable number rather than the jitter of
@@ -164,7 +171,19 @@ void simTask(void*) {
       framesSince = 0;
     }
 
-    vTaskDelayUntil(&next, period);
+    // vTaskDelayUntil returns IMMEDIATELY once the deadline has already passed, so a simTask that
+    // cannot hit its frame period stops yielding entirely and the priority-1 console task never
+    // runs again -- the device looks hung when it is merely late. Found by running under QEMU,
+    // which is slow enough to trigger it every frame, but a real board that falls behind (too many
+    // particles, a slow blit) would starve exactly the same way, and would do it precisely when
+    // someone needs the console to find out why.
+    if ((int32_t)(xTaskGetTickCount() - next) >= 0) {
+      next = xTaskGetTickCount();   // give up on catching up rather than spinning
+      ++g_overruns;
+      vTaskDelay(1);                // one tick to anything below us
+    } else {
+      vTaskDelayUntil(&next, period);
+    }
   }
 }
 
@@ -224,6 +243,9 @@ void printImu() {
 void printStats() {
   Serial.printf("fps %.1f   sim %.2f ms   splat %.2f ms   blit %.2f ms   substeps %d\n",
                 g_stats.fps, g_stats.simMs, g_stats.renderMs, g_stats.blitMs, g_stats.substeps);
+  Serial.printf("frames %u, overruns %u (%.1f%%)\n", (unsigned)g_stats.frames,
+                (unsigned)g_overruns,
+                g_stats.frames ? 100.0f * (float)g_overruns / (float)g_stats.frames : 0.0f);
   Serial.printf("particles %d/%d   scene %d (%s)%s\n", g_sim.particleCount(), kMaxParticles,
                 g_sim.scene(), sceneAt(g_sim.scene()).name,
                 g_sim.transitioning() ? "  [transitioning]" : "");
@@ -382,14 +404,24 @@ void setup() {
   Serial.printf("simulation: %d particles, capacity %d\n", g_sim.particleCount(),
                 g_sim.capacity());
 
+#if PARTSIM_QEMU
+  // No panels under emulation. QEMU models the CPU, RAM, flash, timers and UART, but not LCD_CAM
+  // or GDMA -- and the HUB75 library spins waiting for a DMA completion that never arrives, which
+  // starves setup() before it can even report the hang. Nothing about the display path is
+  // testable here; everything above it is.
+  Serial.println(F("QEMU build: panel driver skipped (no LCD_CAM/GDMA model)"));
+#else
   if (!g_panels.begin(g_sim.geometry(), kColorDepthBits, kDefaultBrightness)) {
     Serial.println(F("FATAL: HUB75 init failed -- check Pins.h against the wiring"));
     for (;;) delay(1000);
   }
+#endif
+#if !PARTSIM_QEMU
   Serial.printf("panels: chain %dx%d, rows %s\n", g_panels.chain().chainWidth(),
                 g_panels.chain().chainHeight(),
                 g_panels.allRunsHorizontal(g_sim.geometry()) ? "all horizontal (fast blit)"
                                                              : "some vertical (slower blit)");
+#endif
 
   MotionConfig mcfg = MotionConfig::defaults();
   // The axis map is the one thing that cannot be guessed: it depends on how the breakout is
@@ -406,6 +438,15 @@ void setup() {
     Serial.println(F("IMU: LSM6DSOX at 208 Hz, +-8 g / +-500 dps"));
     xTaskCreatePinnedToCore(imuTask, "imu", 2560, nullptr, 3, nullptr, 0);
   }
+
+#if PARTSIM_QEMU
+  // Run it here, before simTask exists. The emulator cannot keep a 30fps cadence, so a running
+  // simTask would fight the console for the whole session -- and the determinism sequence is the
+  // only thing this environment is for.
+  Serial.println(F("QEMU: running the determinism sequence"));
+  runGolden();
+  Serial.println(F("QEMU: done"));
+#endif
 
   // 6KB of stack: the solver recurses nowhere and every pool is static, so this is generous.
   xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, nullptr, 1);

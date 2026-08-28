@@ -25,6 +25,9 @@ set(PARTSIM_INTERNAL_PIXELS  "" CACHE STRING "Keep an RGBA copy of every panel (
 set(PARTSIM_PROFILE "" CACHE STRING "Capacity profile: empty (host) or esp32")
 
 option(PARTSIM_SANITIZE "Build with ASan+UBSan" OFF)
+# Opt-in: runs the firmware under Espressif's QEMU fork and checks the device determinism hash.
+# ~90s of emulated CPU, so not part of an ordinary ctest run.
+option(PARTSIM_QEMU_TEST "Add the QEMU determinism ctest" OFF)
 
 add_subdirectory(core)
 

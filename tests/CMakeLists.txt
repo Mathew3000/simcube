@@ -41,6 +41,16 @@ if(PARTSIM_PROFILE STREQUAL "")
            COMMAND ${CMAKE_COMMAND} -E env bash
                    ${CMAKE_SOURCE_DIR}/scripts/check_esp32_budget.sh)
 
+  # The third leg of the determinism check: the golden sequence on emulated Xtensa. Slow (~90s of
+  # emulated CPU) and skips loudly without Espressif's QEMU fork, so it is opt-in via
+  # -DPARTSIM_QEMU_TEST=ON rather than part of every run.
+  if(PARTSIM_QEMU_TEST)
+    add_test(NAME qemu_determinism
+             COMMAND ${CMAKE_COMMAND} -E env bash
+                     ${CMAKE_SOURCE_DIR}/scripts/check_qemu.sh)
+    set_tests_properties(qemu_determinism PROPERTIES TIMEOUT 1200)
+  endif()
+
   # ...and the firmware must still compile and link for Xtensa. Skips if PlatformIO is absent.
   add_test(NAME esp32_build
            COMMAND ${CMAKE_COMMAND} -E env bash

@@ -35,16 +35,40 @@ constexpr int kA = 17;
 constexpr int kB = 18;
 constexpr int kC = 8;
 constexpr int kD = 9;
-constexpr int kE = -1;  // 1/16 scan: unused
+// 32x32 panels are 1/16 scan and ignore E; 64x64 are 1/32 scan and REQUIRE it. Wiring it always
+// lets one board design serve both -- an unused E on a 1/16 panel is harmless, while a missing E on
+// a 1/32 panel shows the top half of the panel duplicated.
+constexpr int kE = 21;
 constexpr int kLat = 10;
 constexpr int kOe = 11;
 constexpr int kClk = 12;
 
+// --- role straps ------------------------------------------------------------------------------
+// Two pins, pulled up, jumper to ground. Unstrapped (0b11) is the master; see Role.h for why that
+// choice is the diagnosable one.
+constexpr int kRoleA = 38;
+constexpr int kRoleB = 39;
+
+// --- SPI, master to display nodes ---------------------------------------------------------------
+// ONE firmware image serves every role, so a signal present on both board types must use the SAME
+// pin on both. SCK/MOSI/MISO therefore avoid the HUB75 block entirely -- an earlier draft of this
+// file put SCK on 12 and MOSI on 11, which are CLK and OE, and would have had the SPI link fighting
+// the panel bus on the display boards.
+//
+// Signals that exist on only one board type may reuse pins the other spends elsewhere: the master
+// has no HUB75, so its three chip selects sit on 4/5/6, which are RGB lines on a display board.
+constexpr int kSpiSck = 13;   // both roles
+constexpr int kSpiMosi = 14;  // both roles
+constexpr int kSpiMiso = 47;  // both roles
+constexpr int kSpiCsIn = 48;  // display: this node's chip select, an input
+constexpr int kSpiCsOut[3] = {4, 5, 6};  // master: one per display node, asserted together
+
 // --- IMU (I2C) --------------------------------------------------------------------------------
 // Kept away from the panel bus deliberately: ~1.4m of unterminated ribbon switching at 16MHz is
 // a fine antenna, and an I2C line routed alongside it will see the clock.
-constexpr int kSda = 13;
-constexpr int kScl = 14;
+// Master only, so these may reuse pins a display board spends on HUB75 addressing.
+constexpr int kSda = 8;
+constexpr int kScl = 9;
 constexpr int kI2cHz = 400000;
 
 }  // namespace pins
