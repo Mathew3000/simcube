@@ -13,6 +13,7 @@ add_library(partsim_core STATIC
   src/MotionSource.cpp
   src/ChainMap.cpp
   src/RenderState.cpp
+  src/SimFrame.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)
