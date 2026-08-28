@@ -4,9 +4,13 @@
 **[M]** is measured from the firmware in this repo; every figure marked **[A]** is an assumption
 that must be confirmed against a real panel datasheet or on the bench before layout is committed.
 
-**Revision:** 0.2 — single-board layout, 4S1P 18650 pack, 12 A display rail, 5-pin magnetic
-dock, IMU offset compensation. Supersedes 0.1's 3S1P 21700 pack and 8 A rail. Topology and PSRAM
-corrections live in [RESOURCES.md](RESOURCES.md) §1–2.
+**Revision:** 0.3 — IMU returns to the geometric centre with the cells mounted off-centre, which
+supersedes 0.2's offset-compensation approach (§6.1 for why the centre is provably optimal, not
+merely convenient).
+
+0.2 — single-board layout, 4S1P 18650 pack, 12 A display rail, 5-pin magnetic dock. Superseded
+0.1's 3S1P 21700 pack and 8 A rail. Topology and PSRAM corrections live in
+[RESOURCES.md](RESOURCES.md) §1–2.
 
 ---
 
@@ -323,13 +327,20 @@ and connects the console with no plug to find.
 - **REQ-M-2** LSM6DSOX 6-DOF IMU on I2C, configured ±8 g / ±500 dps at 208 Hz. **±8 g is not
   negotiable** — a hand-shaken cube clips a ±2 g part, and it clips exactly during the interaction
   the object exists for.
-- **REQ-M-3** The IMU cannot sit at the centroid on a single-board layout — four 18650 holders and
-  the board occupy it. Its **offset from the centroid shall therefore be a recorded calibration
-  constant**, and firmware shall subtract the rigid-body terms:
-  `a_centroid = a_measured − ω×(ω×r) − ω̇×r`, with ω and ω̇ already available from the gyro.
-  Without this, an IMU 40 mm off-centre reports spurious centrifugal acceleration during exactly
-  the shaking the object exists for. A satellite IMU board at the centre on an I²C stub is the
-  fallback if the compensation disappoints.
+- **REQ-M-3** The IMU shall sit at the cube's **geometric centre**, on a satellite board reaching in
+  from the main board, with the cells mounted off-centre to free that space. Rev 0.1 assumed the
+  cells would occupy the centre and specified firmware compensation instead; putting the IMU there
+  is both simpler and strictly more correct — see §6.1.
+- **REQ-M-3a** The IMU bracket's **first resonant mode shall be above 200 Hz.** This is the real
+  cost of a satellite board and it is easy to get wrong. The LSM6DSOX at 208 Hz ODR has roughly
+  100 Hz of analogue bandwidth, and `MotionSource`'s shake path is a 5 Hz *high*-pass — it passes
+  everything above 5 Hz. A bracket resonance anywhere below ~100 Hz is therefore injected straight
+  into the container-acceleration signal as phantom shake, and the fluid sloshes in response to the
+  bracket ringing rather than to the hand. Fix it mechanically: a short thick post or a triangulated
+  bracket, not a long thin standoff. A firmware low-pass would also work, at the cost of shake
+  latency.
+- **REQ-M-3b** I²C to the satellite board shall be routed away from the HUB75 ribbons. 400 kHz is
+  slow, but ribbon switching at 16 MHz is an effective aggressor.
 - **REQ-M-4** SPI host: SCK, MOSI, MISO and **three individual CS lines**. Broadcast asserts all
   three CS at once, so one payload reaches all nodes; individual CS is for polling status on MISO.
 - **REQ-M-5** Drives no panels. Its spare SRAM and its whole CPU budget are why the radio and the
@@ -338,8 +349,38 @@ and connects the console with no plug to find.
   buffer for a HUB75 chain it does not have.)
 - **REQ-M-6** USB-C for PD, USB2 console and JTAG on one connector.
 - **REQ-M-7** One button (mode/reset) and one RGB status LED, both firmware-defined.
-- **REQ-M-8** 3.3 V buck (not LDO) from pack voltage. An LDO dropping 11.1→3.3 V at 150 mA wastes
+- **REQ-M-8** 3.3 V buck (not LDO) from pack voltage. An LDO dropping 14.8→3.3 V at 150 mA wastes
   1.2 W as heat inside a sealed box.
+
+### 6.1 Why the geometric centre, and not the centre of mass
+
+The simulation applies **one** container acceleration to the whole fluid, so the question is which
+single point best represents the volume. Across a rigid body the true acceleration field during
+rotation is
+
+```
+a(r) = a_ref + ω̇ × r + ω × (ω × r)
+```
+
+Integrate that over a volume symmetric about the geometric centre and both correction terms vanish
+exactly, because `∫ r dV = 0`. **The acceleration at the geometric centre is the exact volume
+average**, which makes it the optimal sample point rather than merely a convenient one. Any other
+position needs the compensation Rev 0.1 specified, and even then only recovers what this placement
+gives for free.
+
+Centre of mass is the wrong target: what the fluid experiences depends on where the *fluid* is, not
+where the mass is. Sensor position also only matters during rotation — gravity is uniform, so
+attitude estimation is unaffected either way.
+
+Mounting the cells off-centre costs almost nothing. 228 g of cells and holders 38 mm off-centre in a
+1.55 kg object shifts the centre of mass by **5.6 mm**, 8.7 % of the half-width. The geometric
+centre then swings about that offset CoM during rotation — 0.06 g at 10 rad/s, 0.23 g at a violent
+20 rad/s, against 1–3 g of linear shake. And an IMU *at* the geometric centre measures that
+correctly, because it is real motion of the fluid volume, not an artefact.
+
+What off-centre mass does cost: a slightly non-diagonal inertia tensor, so the cube will not spin
+perfectly cleanly about its face axes, and impact loading on cantilevered holders. Neither is
+expected to matter for a hand-held object, but both are untested.
 
 ---
 
@@ -440,6 +481,9 @@ That leaves IO1–18, IO21, IO38–42, IO47, IO48 — 26 pins, against the 20 a 
   row — one reason 18650 beats 21700 here despite near-identical energy density. Verify the holder
   footprint against the real frame: four holders plus a 12 A buck plus two HUB75 headers puts the
   board near 80 x 80 mm, most of one internal face.
+- **REQ-MEC-1a** Cells shall be mounted **off-centre**, leaving the geometric centre free for the
+  IMU satellite board (REQ-M-3). The resulting 5.6 mm shift in centre of mass is acceptable; see
+  §6.1.
 - **REQ-MEC-2** Target all-in mass **≤1.6 kg**: ~780 g panels, ~188 g cells + ~40 g holders, ~300 g frame and
   boards. Above roughly 2 kg the object stops being shakeable and the IMU becomes a tilt sensor,
   which undercuts the primary interaction.
