@@ -37,6 +37,7 @@ if [ "$got" != "$want" ]; then
   echo "  The host and WASM builds agree, so this is Xtensa codegen or newlib diverging."
   rm -f "$LOG"; exit 1
 fi
-steps="$(grep -oE '\([0-9]+ steps in [0-9]+ ms' "$LOG" | head -1)"
-echo "ok   emulated Xtensa reproduces the device hash ($got)  $steps"
+echo "ok   emulated Xtensa reproduces the device hash ($got)"
+echo "     (no timing is reported: QEMU drives guest timers from host wall-clock, so any"
+echo "      ms/step from it measures the build machine rather than the S3)"
 rm -f "$LOG"

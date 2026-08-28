@@ -76,6 +76,9 @@ volatile bool g_showTestPattern = false;
 // rate is worth knowing about.
 volatile uint32_t g_overruns = 0;
 
+// One face of RGB, for timing the resolve pass without needing the panel driver.
+uint8_t g_staging[kMaxPanelTexels * 3];
+
 // ------------------------------------------------------------------------------------------------
 
 void imuTask(void*) {
@@ -211,6 +214,7 @@ void printHelp() {
   Serial.println(F("  r            frame timing and memory"));
   Serial.println(F("  g            run the golden determinism sequence (blocks ~30s)"));
   Serial.println(F("  p            pause/resume the physics"));
+  Serial.println(F("  x            benchmark: particle sweep, needs no panels attached"));
 }
 
 void printMounts() {
@@ -269,14 +273,112 @@ void runGolden() {
   const uint32_t t0 = millis();
   const uint32_t hash = goldenHash(g_sim, kGoldenSteps, kGoldenSeed);
   const uint32_t dt = millis() - t0;
+#if PARTSIM_QEMU
+  // Print the hash, and say plainly that the timing is meaningless here rather than leaving a
+  // number that looks like a measurement. QEMU drives guest timers from HOST wall-clock, so this
+  // reports how fast the emulator ran on whatever machine it ran on -- measured at 83 ms/step on
+  // one laptop and 200 ms/step under -icount on the same one. Neither is the S3.
+  Serial.printf("state  %08x   (%u steps; timing suppressed -- QEMU is not cycle-accurate)\n",
+                hash, 2u * kGoldenSteps);
+#else
   Serial.printf("state  %08x   (%u steps in %u ms, %.2f ms/step)\n", hash, 2u * kGoldenSteps, dt,
                 (float)dt / (float)(2 * kGoldenSteps));
+#endif
   Serial.println(F("compare against scripts/golden_hash_esp32.txt (first field)"));
   // The sequence left the simulation in whatever state it ended in; put a scene back.
   g_sim.initScene(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, 0, 1,
                   kPanelRes);
   g_sim.setAutoCycle(true);
   g_paused = wasPaused;
+}
+
+
+// --- benchmark ---------------------------------------------------------------------------------
+// The whole point of being able to run this on a bare devkit.
+//
+// Everything expensive here is computation into internal buffers: the solver, the splat, the
+// palette resolve. Even the BLIT is measurable without a panel, because HUB75 is write-only -- the
+// panel is a passive shift-register chain with no handshake, so drawPixelRGB888 writes into the DMA
+// buffer and the LCD_CAM peripheral clocks it out into nothing. The only thing a missing panel
+// costs is light.
+//
+// So this answers the one question that has never been answered: how many particles actually fit a
+// frame. Everything else in the budget is downstream of it.
+void runBench() {
+  const int counts[] = {320, 640, 960, 1280};
+  const int reps = 30;
+
+  Serial.println(F("particle sweep, water only (no heat field):"));
+  Serial.println(F("  count    sim/step   splat   resolve    blit    frame    fps   verdict"));
+
+  int best = 0;
+  for (unsigned c = 0; c < sizeof(counts) / sizeof(counts[0]); ++c) {
+    const int n = counts[c];
+    if (n > kMaxParticles) continue;
+    if (!g_sim.init(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, n, 1, kPanelRes)) {
+      Serial.printf("  %5d    init failed\n", n);
+      continue;
+    }
+    for (int i = 0; i < 20; ++i) g_sim.stepFixed();  // settle, so the neighbour grid is realistic
+
+    uint32_t t = micros();
+    for (int i = 0; i < reps; ++i) g_sim.stepFixed();
+    const float simMs = (float)(micros() - t) / 1000.0f / (float)reps;
+
+    t = micros();
+    for (int i = 0; i < reps; ++i) g_sim.accumulate();
+    const float splatMs = (float)(micros() - t) / 1000.0f / (float)reps;
+
+    t = micros();
+    for (int i = 0; i < reps; ++i)
+      for (int k = 0; k < g_sim.geometry().count(); ++k)
+        g_sim.renderer().resolve(k, g_staging, 3);
+    const float resolveMs = (float)(micros() - t) / 1000.0f / (float)reps;
+
+    float blitMs = 0.0f;
+#if !PARTSIM_QEMU
+    if (g_panels.ready()) {
+      t = micros();
+      for (int i = 0; i < reps; ++i) g_panels.present(g_sim.renderer(), g_sim.geometry());
+      blitMs = (float)(micros() - t) / 1000.0f / (float)reps;
+    }
+#endif
+
+    // A displayed frame is kSubstepsPerFrame physics steps plus one of everything else.
+    const float substeps = (1.0f / (float)kTargetFps) / kFixedDt;
+    const float frameMs = simMs * substeps + splatMs + blitMs;
+    const float budget = 1000.0f / (float)kTargetFps;
+    if (frameMs <= budget) best = n;
+    Serial.printf("  %5d    %7.2f %7.2f   %7.2f %7.2f  %7.2f %6.1f   %s\n", n, simMs, splatMs,
+                  resolveMs, blitMs, frameMs, 1000.0f / frameMs,
+                  frameMs <= budget ? "fits" : "OVER");
+  }
+
+  Serial.printf("\n  %.0f substeps/frame at %d fps (kFixedDt = 1/%.0f), budget %.1f ms\n",
+                (1.0f / (float)kTargetFps) / kFixedDt, kTargetFps, 1.0f / kFixedDt,
+                1000.0f / (float)kTargetFps);
+  Serial.printf("  largest sweep point that fits: %d particles\n", best);
+
+  // The kettle is the measured worst case: water, sand AND an active heat field, so splatField
+  // iterates every cell instead of exiting immediately.
+  if (g_sim.initScene(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, 4, 1,
+                      kPanelRes)) {
+    for (int i = 0; i < 60; ++i) g_sim.stepFixed();
+    uint32_t t = micros();
+    for (int i = 0; i < reps; ++i) g_sim.stepFixed();
+    const float simMs = (float)(micros() - t) / 1000.0f / (float)reps;
+    t = micros();
+    for (int i = 0; i < reps; ++i) g_sim.accumulate();
+    const float splatMs = (float)(micros() - t) / 1000.0f / (float)reps;
+    Serial.printf("\n  kettle (%d particles + active heat field): sim %.2f ms, splat %.2f ms\n",
+                  g_sim.particleCount(), simMs, splatMs);
+    Serial.println(F("  the heat field is why splat costs more here -- splatField exits"));
+    Serial.println(F("  immediately when nothing is burning."));
+  }
+
+  Serial.println(F("\nrestoring scene 0"));
+  g_sim.initScene(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, 0, 1, kPanelRes);
+  g_sim.setAutoCycle(true);
 }
 
 void handleLine(char* line) {
@@ -354,6 +456,10 @@ void handleLine(char* line) {
 
     case 'g':
       runGolden();
+      break;
+
+    case 'x':
+      runBench();
       break;
 
     case 'p':

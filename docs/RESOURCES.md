@@ -283,6 +283,49 @@ also shared with instruction-cache fills, so it is not a private budget.
 
 ---
 
+## 5.1 Why no timing number comes out of QEMU — and one that does not need it
+
+Milestone 3.5 runs the firmware under Espressif's QEMU fork and it reproduces the device
+determinism hash. It says **nothing** about speed, and the reason is worth recording because the
+firmware used to print a figure that looked like a measurement.
+
+QEMU drives guest timers from **host wall-clock**, so `millis()` inside the guest reports how long
+the emulator took on whatever machine ran it. Measured on one laptop:
+
+| | ms/step at 1280 particles | what it actually measures |
+|---|---|---|
+| native host (M-series) | 1.92 | the wrong ISA |
+| QEMU, default | 83.50 | that laptop's TCG throughput |
+| QEMU, `-icount shift=2` | 199.63 | host-independent, but see below |
+| bottom-up estimate, 5500 cyc | 29.30 | 240 MHz at 1 IPC |
+
+`-icount shift=2` makes virtual time advance by instruction count (4 ns/instruction ≈ 250 MHz at
+1 IPC) rather than host speed, which at least makes the number repeatable across machines. But it
+implies **38 990 instructions per particle per step**, against a bottom-up count of ~5 280 (33
+neighbours × 2 solver iterations × 2 passes × ~40 instructions). **That 7.4× gap is unexplained**,
+so the icount figure is not trustworthy either and the firmware now suppresses timing output under
+`PARTSIM_QEMU` instead of printing it.
+
+### The arithmetic problem that does not need an emulator
+
+`kFixedDt` is 1/60 and the firmware calls `advance(1/30)`, so it runs **two physics steps per
+displayed frame**. Against the plan's own 5500 cycles/particle/step figure:
+
+```
+1280 particles x 5500 cycles  = 29.3 ms/step at 240 MHz
+x 2 substeps                  = 58.7 ms/frame  ->  17 fps, not 30
+particles that fit 33.3 ms    = 726
+```
+
+So the "~1300 particles at 30 fps" figure looks like it assumed **one** step per frame. If that is
+right the pool should be roughly halved — and the estimate is optimistic in the other direction
+too: native measures ~6000 cycles/particle/step on a ~4 GHz core, and Xtensa should need *more*
+cycles than an M-series core for the same scalar float work, not fewer.
+
+None of this is a device measurement, so it is not a conclusion. It is a reason to expect the
+overrun counter (`r`) to fire on the first boot with real panels, and to treat 1280 as unproven
+rather than as a budget.
+
 ## 6. What has to be measured before the topology is settled
 
 1. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether six faces on one
@@ -292,5 +335,8 @@ also shared with instruction-cache fills, so it is not a private budget.
 3. **Achieved refresh** at 128×64 and 384×64, 6-bit. The 141 Hz measured on a 192×32 chain will
    not survive 4× the pixels.
 4. **Panel power** [A] — 20 W/panel drives the pack, the converter and the runtime requirement.
-5. **Whether the master's 117 KB spare survives ESP-NOW.** ~55 KB is an estimate, and it is the
+5. **The real particle budget.** See §5.1: the 1280 figure may assume one physics step per frame
+   when the firmware runs two, and the underlying cycles-per-particle estimate looks optimistic.
+   The overrun counter reports it directly.
+6. **Whether the master's 117 KB spare survives ESP-NOW.** ~55 KB is an estimate, and it is the
    headroom the radio was justified against.
