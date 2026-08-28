@@ -34,9 +34,9 @@ bool g_ready = false;
 
 extern "C" {
 
-PS_EXPORT int ps_init(int mode, int particleCount, uint32_t seed) {
-  g_ready = g_sim.init(mode, particleCount, seed);
-  return g_ready ? g_sim.particleCount() : 0;
+PS_EXPORT int ps_init(int mode, int particleCount, uint32_t seed, int panelRes) {
+  g_ready = g_sim.init(mode, particleCount, seed, panelRes);
+  return g_ready ? 1 : 0;
 }
 
 PS_EXPORT int ps_particle_count() { return g_ready ? g_sim.particleCount() : 0; }
@@ -58,6 +58,12 @@ PS_EXPORT void ps_add_jerk(float qx, float qy, float qz, float qw, float ax, flo
 
 PS_EXPORT int ps_advance(float dtSeconds) { return g_ready ? g_sim.advance(dtSeconds) : 0; }
 PS_EXPORT void ps_render() { if (g_ready) g_sim.render(); }
+
+// Panel resolution and world-units-per-texel. The frontend needs the pitch to size anything in
+// world space -- cubeview.js used to multiply a texel count by 1.0 and call it a world size, which
+// was right only while the pitch happened to be 1.0.
+PS_EXPORT int ps_panel_res() { return g_ready ? g_sim.panelRes() : 0; }
+PS_EXPORT float ps_panel_pitch() { return g_ready ? g_sim.pitch() : 1.0f; }
 
 PS_EXPORT int ps_panel_count() { return g_ready ? g_sim.geometry().count() : 0; }
 PS_EXPORT int ps_panel_w(int i) { return g_ready ? (int)g_sim.geometry().at(i).w : 0; }
@@ -105,9 +111,9 @@ PS_EXPORT void ps_set_auto_cycle(int on) { if (g_ready) g_sim.setAutoCycle(on !=
 PS_EXPORT int ps_auto_cycle() { return (g_ready && g_sim.autoCycle()) ? 1 : 0; }
 
 // Load a scene as part of init, rather than a bare particle count.
-PS_EXPORT int ps_init_scene(int mode, int sceneId, uint32_t seed) {
-  g_ready = g_sim.initScene(mode, sceneId, seed);
-  return g_ready ? g_sim.particleCount() : 0;
+PS_EXPORT int ps_init_scene(int mode, int sceneId, uint32_t seed, int panelRes) {
+  g_ready = g_sim.initScene(mode, sceneId, seed, panelRes);
+  return g_ready ? 1 : 0;
 }
 
 PS_EXPORT void ps_set_palette(int index) {

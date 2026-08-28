@@ -36,6 +36,7 @@
 #define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
 #define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 1024  // 32x32
+#define PARTSIM_DEFAULT_PANEL_RES 32
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 6    // it drives all of them
 #define PARTSIM_DEFAULT_DRIVES_PANELS 1
 #define PARTSIM_DEFAULT_RUNS_SOLVER 1
@@ -55,6 +56,7 @@
 #define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
 #define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096  // 64x64
+#define PARTSIM_DEFAULT_PANEL_RES 64
 // One render slot, not zero: enough for a diagnostic face, and the master has the memory spare.
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 1
 #define PARTSIM_DEFAULT_MAX_GRID_CELLS PARTSIM_DEVICE_MAX_GRID_CELLS
@@ -73,6 +75,7 @@
 #define PARTSIM_DEFAULT_MAX_PARTICLES PARTSIM_DEVICE_MAX_PARTICLES
 #define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096  // 64x64
+#define PARTSIM_DEFAULT_PANEL_RES 64
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 2
 // A display node receives state and draws it -- it never integrates. So it carries RenderState's
 // draw-only containers instead of a Simulation, which is what brings it inside the SRAM budget.
@@ -87,6 +90,7 @@
 #define PARTSIM_DEFAULT_MAX_PARTICLES 16384
 #define PARTSIM_DEFAULT_MAX_PANELS 8
 #define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 4096
+#define PARTSIM_DEFAULT_PANEL_RES 32
 #define PARTSIM_DEFAULT_MAX_RENDER_PANELS 8
 #define PARTSIM_DEFAULT_DRIVES_PANELS 0
 #define PARTSIM_DEFAULT_RUNS_SOLVER 1
@@ -123,6 +127,9 @@
 #ifndef PARTSIM_RUNS_SOLVER
 #define PARTSIM_RUNS_SOLVER PARTSIM_DEFAULT_RUNS_SOLVER
 #endif
+#ifndef PARTSIM_PANEL_RES
+#define PARTSIM_PANEL_RES PARTSIM_DEFAULT_PANEL_RES
+#endif
 
 namespace partsim {
 
@@ -145,9 +152,20 @@ constexpr int kMaxEmitters = 4;
 static_assert(kMaxParticles <= 65535, "particle indices are uint16");
 
 // --- world units -----------------------------------------------------------
-// One world unit == one panel texel. A 32x32x32 cube volume is therefore 32 units on a
-// side, which keeps every tuning constant below readable as "in pixels".
-constexpr float kPitch = 1.0f;
+// The simulated volume is ALWAYS this many world units on a side, whatever the panel resolution.
+// Every solver constant below is tuned against it -- the CFL argument for kGravityMag, the field
+// grid's cell count, the rest spacing -- so it is an invariant, not a preference. A 64-unit world
+// was measured and rejected: its heat field alone is 155KB.
+constexpr float kWorldSize = 32.0f;
+
+// Panel resolution is a DISPLAY choice. It changes how finely the volume is sampled and nothing
+// else: tests/test_resolution.cpp asserts the state hash is bit-identical at 32 and 64.
+//
+// The pitch is DERIVED from it rather than passed alongside, so res 64 at pitch 1.0 -- a 64-unit
+// world -- cannot be requested by accident.
+constexpr int kPanelRes = PARTSIM_PANEL_RES;
+constexpr float pitchFor(int res) { return kWorldSize / (float)res; }
+constexpr float kPitch = kWorldSize / (float)kPanelRes;
 
 // --- solver ----------------------------------------------------------------
 constexpr float kRestSpacing = 1.5f;                  // d: particle rest separation

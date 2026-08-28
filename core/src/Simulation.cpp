@@ -3,7 +3,7 @@
 namespace partsim {
 namespace {
 
-constexpr int kPanelRes = 32;
+
 // A shake dies away over a handful of frames rather than instantly, so a flick reads as an
 // impulse with follow-through instead of a single-frame jolt.
 constexpr float kJerkDecay = 0.85f;
@@ -16,10 +16,18 @@ constexpr int kPopulationRate = 32;
 
 }  // namespace
 
-bool Simulation::init(int mode, int particleCount, uint32_t seed) {
+bool Simulation::init(int mode, int particleCount, uint32_t seed, int panelRes) {
+  if (panelRes < 2) return false;
+  if (panelRes * panelRes > kMaxPanelTexels) return false;
   geometry_.clear();
-  geometry_ = (mode == kSinglePanel) ? Geometry::slab(kPanelRes, kPanelRes, kPitch)
-                                     : Geometry::cube(kPanelRes, kPitch);
+  const float pitch = pitchFor(panelRes);
+  geometry_ = (mode == kSinglePanel) ? Geometry::slab(panelRes, panelRes, pitch)
+                                     : Geometry::cube(panelRes, pitch);
+  // Geometry::cube discards addPanel's bool, so an over-capacity panel yields an EMPTY table
+  // rather than an error. Catch it here, where the cause is still in view.
+  const int wantPanels = (mode == kSinglePanel) ? 1 : 6;
+  if (geometry_.count() != wantPanels) return false;
+  panelRes_ = panelRes;
   if (!volume_.build(geometry_, kSlabDepth, kCellSize)) return false;
 
   solver_.init();
@@ -57,8 +65,8 @@ bool Simulation::init(int mode, int particleCount, uint32_t seed) {
   return true;
 }
 
-bool Simulation::initScene(int mode, int sceneId, uint32_t seed) {
-  if (!init(mode, 0, seed)) return false;
+bool Simulation::initScene(int mode, int sceneId, uint32_t seed, int panelRes) {
+  if (!init(mode, 0, seed, panelRes)) return false;
   setScene(sceneId);
   return true;
 }

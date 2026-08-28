@@ -70,7 +70,12 @@ export function createCubeView(mod, { canvasParent = document.body, frame = true
 
   if (frame && panels.length === 6) {
     // A dark frame, which is also honest: real HUB75 panels have a physical bezel at the seams.
-    const size = panels[0].w * 1.0;
+    //
+    // The size must come from the basis, not the texel count. `panels[0].w * 1.0` was a texel
+    // count standing in for a world size -- correct only while the pitch happened to be 1.0, and
+    // at 64 texels/pitch 0.5 it would have drawn a 64-unit box around a 32-unit cube. Every other
+    // placement in this file already derives from u/v; this was the one that did not.
+    const size = panels[0].mesh.geometry.parameters.width;
     cube.add(new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(size, size, size)),
       new THREE.LineBasicMaterial({ color: 0x1b2634 }),

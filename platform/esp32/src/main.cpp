@@ -37,7 +37,9 @@ constexpr int kFaces = PARTSIM_FACE_COUNT;
 constexpr int kFaces = 6;
 #endif
 
-constexpr int kPanelRes = 32;
+// Panel resolution comes from core's capacity profile, not a local copy. There used to be a
+// duplicate here that was only used for the boot banner -- so it could not break anything, but it
+// could print a lie, which is worse in a message someone reads during bring-up.
 constexpr uint8_t kColorDepthBits = 6;
 constexpr uint8_t kDefaultBrightness = 96;
 constexpr int kTargetFps = 30;
@@ -249,7 +251,8 @@ void runGolden() {
                 (float)dt / (float)(2 * kGoldenSteps));
   Serial.println(F("compare against scripts/golden_hash_esp32.txt (first field)"));
   // The sequence left the simulation in whatever state it ended in; put a scene back.
-  g_sim.initScene(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, 0, 1);
+  g_sim.initScene(kFaces == 1 ? Simulation::kSinglePanel : Simulation::kCube, 0, 1,
+                  kPanelRes);
   g_sim.setAutoCycle(true);
   g_paused = wasPaused;
 }
@@ -371,7 +374,7 @@ void setup() {
 #endif
 
   const int mode = (kFaces == 1) ? Simulation::kSinglePanel : Simulation::kCube;
-  if (!g_sim.initScene(mode, 0, 1)) {
+  if (!g_sim.initScene(mode, 0, 1, kPanelRes)) {
     Serial.println(F("FATAL: simulation init failed -- capacities too small for this geometry"));
     for (;;) delay(1000);
   }

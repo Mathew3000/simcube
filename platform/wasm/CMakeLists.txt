@@ -26,5 +26,5 @@ target_link_options(partsim PRIVATE
   -sMALLOC=emmalloc
   -sASSERTIONS=0
   -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32
-  "-sEXPORTED_FUNCTIONS=['_ps_init','_ps_particle_count','_ps_capacity','_ps_set_orientation','_ps_add_jerk','_ps_advance','_ps_render','_ps_panel_count','_ps_panel_w','_ps_panel_h','_ps_panel_ptr','_ps_panel_basis','_ps_stats','_ps_set_stats_timing','_ps_set_palette','_ps_palette_count','_ps_scene_count','_ps_scene','_ps_set_scene','_ps_scene_name','_ps_set_auto_cycle','_ps_auto_cycle','_ps_init_scene','_ps_state_hash','_ps_golden_hash','_ps_pixel_hash']"
+  "-sEXPORTED_FUNCTIONS=['_ps_init','_ps_panel_res','_ps_panel_pitch','_ps_particle_count','_ps_capacity','_ps_set_orientation','_ps_add_jerk','_ps_advance','_ps_render','_ps_panel_count','_ps_panel_w','_ps_panel_h','_ps_panel_ptr','_ps_panel_basis','_ps_stats','_ps_set_stats_timing','_ps_set_palette','_ps_palette_count','_ps_scene_count','_ps_scene','_ps_set_scene','_ps_scene_name','_ps_set_auto_cycle','_ps_auto_cycle','_ps_init_scene','_ps_state_hash','_ps_golden_hash','_ps_pixel_hash']"
 )

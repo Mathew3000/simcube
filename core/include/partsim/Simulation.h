@@ -33,9 +33,16 @@ class Simulation {
   void clearRenderSet() { renderSetCount_ = -1; }
   int renderSetCount() const { return renderSetCount_; }
 
-  bool init(int mode, int particleCount, uint32_t seed);
+  // panelRes is the only display-side parameter: the pitch is derived so the world stays
+  // kWorldSize units whatever the panels are. Defaulted, so every existing caller is unaffected
+  // and switching resolution is opt-in rather than a silent change of behaviour.
+  //
+  // Fails if res*res exceeds kMaxPanelTexels -- checked here rather than left to surface later as
+  // a generic "simulation init failed" from deep inside Geometry.
+  bool init(int mode, int particleCount, uint32_t seed, int panelRes = kPanelRes);
   // Loads a scene preset: refills particles, sets the palette, installs heat emitters.
-  bool initScene(int mode, int sceneId, uint32_t seed);
+  bool initScene(int mode, int sceneId, uint32_t seed, int panelRes = kPanelRes);
+
   // Immediate: replaces the population in one go. Fine for a deliberate user action.
   void setScene(int sceneId);
   // Gradual: drains the old materials and refills the new ones over a couple of seconds while
@@ -112,6 +119,8 @@ class Simulation {
   Renderer& renderer() { return renderer_; }
   const Renderer& renderer() const { return renderer_; }
 
+  int panelRes() const { return panelRes_; }
+  float pitch() const { return pitchFor(panelRes_); }
   int particleCount() const { return particles_.n; }
   int capacity() const { return solver_.capacity(volume_); }
   void setPalette(const Palette* p) { renderer_.setPalette(p); }
@@ -145,6 +154,7 @@ class Simulation {
   // -1 means "not set": render every panel. Otherwise the explicit subset.
   int renderSet_[kMaxRenderPanels] = {0};
   int renderSetCount_ = -1;
+  int panelRes_ = kPanelRes;
 
   Emitter emitters_[kMaxEmitters];
   int emitterCount_ = 0;

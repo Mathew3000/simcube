@@ -1,3 +1,4 @@
+#include <initializer_list>
 // Resolution must be a DISPLAY concern only.
 //
 // 32 texels at pitch 1.0 and 64 texels at pitch 0.5 describe the same 32-unit world. If that is
@@ -10,6 +11,7 @@
 // the container at pitch 0.5.
 #include "check.h"
 #include "partsim/Renderer.h"
+#include "partsim/Simulation.h"
 #include "partsim/Solver.h"
 
 using namespace partsim;
@@ -115,4 +117,56 @@ TEST(resolution_changes_only_the_picture) {
               (float)lit[1] / (float)lit[0]);
   CHECK(lit[0] > 0);
   CHECK(lit[1] > lit[0] * 2);  // genuinely more detail, not a scaled copy
+}
+
+// --- through the full Simulation ----------------------------------------------------------------
+// The tests above work at the Renderer/Solver level. These go through Simulation::initScene, which
+// is what every platform layer actually calls, and which is where the resolution parameter and the
+// capacity check live.
+
+namespace {
+Simulation g_rsim;  // ~1.2MB
+}
+
+TEST(resolution_simulation_runs_at_either_panel_size) {
+  for (int res : {32, 64}) {
+    CHECK(g_rsim.initScene(Simulation::kCube, 4, 5, res));  // kettle: water, sand and fire
+    CHECK(g_rsim.panelRes() == res);
+    CHECK_NEAR(g_rsim.pitch(), kWorldSize / (float)res, 1e-6f);
+    // The container is the invariant, whatever the panels are.
+    CHECK_NEAR(g_rsim.volume().box().size().x, kWorldSize, 1e-4f);
+    CHECK(g_rsim.geometry().count() == 6);
+    CHECK(g_rsim.geometry().at(0).w == (uint16_t)res);
+
+    for (int i = 0; i < 200; ++i) g_rsim.stepFixed();
+    g_rsim.render();
+
+    // Something is actually lit on every face -- the check that catches a resolution that builds
+    // but renders nothing.
+    for (int k = 0; k < 6; ++k) {
+      const uint8_t* px = g_rsim.renderer().panelPixels(k);
+      CHECK(px != nullptr);
+      long lum = 0;
+      for (int t = 0; t < res * res; ++t) lum += px[t * 4] + px[t * 4 + 1] + px[t * 4 + 2];
+      CHECK(lum > 0);
+    }
+    std::printf("       res %d: pitch %.3f, box %.1f units, %d particles, all 6 faces lit\n", res,
+                g_rsim.pitch(), g_rsim.volume().box().size().x, g_rsim.particleCount());
+  }
+}
+
+TEST(resolution_beyond_capacity_fails_at_init) {
+  // Over-capacity used to surface as a generic "simulation init failed" from deep inside
+  // Geometry::addPanel, whose return value cube() discards. Now it is refused where the cause is
+  // still visible.
+  int tooBig = 2;
+  while (tooBig * tooBig <= kMaxPanelTexels) tooBig *= 2;
+  CHECK(!g_rsim.initScene(Simulation::kCube, 0, 1, tooBig));
+  CHECK(!g_rsim.initScene(Simulation::kCube, 0, 1, 1));   // degenerate
+  CHECK(!g_rsim.initScene(Simulation::kCube, 0, 1, 0));
+  CHECK(!g_rsim.initScene(Simulation::kCube, 0, 1, -8));
+  std::printf("       capacity %d texels: res %d refused, res 64 %s\n", kMaxPanelTexels, tooBig,
+              (64 * 64 <= kMaxPanelTexels) ? "accepted" : "refused");
+  // ...and a valid one still works afterwards, so a rejection leaves nothing broken.
+  CHECK(g_rsim.initScene(Simulation::kCube, 0, 1, 32));
 }

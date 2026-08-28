@@ -43,7 +43,14 @@ import { createCubeView } from './cubeview.js';
 import createPartsim from './public/partsim.mjs';
 
 const mod = await createPartsim();
-mod._ps_init(0, 100, 1);
+// Panel resolution, from ?res=NN so it can be changed without a rebuild. The C++ default cannot
+// help here: a JS argument that is simply absent arrives across the WASM ABI as 0, not as the
+// declared default, so every call site has to be explicit.
+const RES = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('res') || '32', 10);
+  return (v === 32 || v === 64) ? v : 32;
+})();
+mod._ps_init(0, 100, 1, RES);
 
 const view = createCubeView(mod, { bloom: false });  // bloom would smear the pattern
 const { renderer, scene, camera, controls, panels, render } = view;

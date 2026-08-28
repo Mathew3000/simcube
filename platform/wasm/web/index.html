@@ -75,7 +75,14 @@ try {
   throw e;
 }
 
-if (!mod._ps_init_scene(0, 0, 0xc0ffee)) {
+// Panel resolution, from ?res=NN so it can be changed without a rebuild. The C++ default cannot
+// help here: a JS argument that is simply absent arrives across the WASM ABI as 0, not as the
+// declared default, so every call site has to be explicit.
+const RES = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('res') || '32', 10);
+  return (v === 32 || v === 64) ? v : 32;
+})();
+if (!mod._ps_init_scene(0, 0, 0xc0ffee, RES)) {
   fail('ps_init_scene failed');
   throw new Error('ps_init_scene');
 }
