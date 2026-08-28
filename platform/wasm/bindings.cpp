@@ -13,6 +13,7 @@
 // would buy nothing anyway.
 #include <cstdint>
 
+#include "partsim/SimFrame.h"
 #include "partsim/Simulation.h"
 
 #ifdef __EMSCRIPTEN__
@@ -27,6 +28,30 @@ using namespace partsim;
 namespace {
 // ~1.2MB of pools; static storage, never the stack.
 Simulation g_sim;
+
+// --- multi-node preview ------------------------------------------------------------------------
+// One master simulation plus up to three display nodes, so the browser shows what the real
+// four-board cube does -- including what happens when a frame goes missing.
+//
+// JS carries the frame bytes between them, and that placement is the point: fault injection becomes
+// honest rather than simulated, because JavaScript physically holds the buffer and can drop it,
+// delay it or corrupt a byte. The protocol is the same SimFrame the firmware uses.
+constexpr int kMaxNodes = 3;
+struct DisplayNode {
+  RenderParticles particles;
+  HeatBuffer heat;
+  Renderer renderer;
+  uint32_t lastStep = 0;
+  bool everReceived = false;
+  int faces[2] = {0, 0};
+  int faceCount = 0;
+};
+DisplayNode g_nodes[kMaxNodes];
+int g_nodeCount = 0;
+uint32_t g_masterStep = 0;
+uint8_t g_frame[frameMaxBytes()];
+int g_frameLen = 0;
+bool g_nodesReady = false;
 float g_basis[12];
 float g_stats[4];
 bool g_ready = false;
@@ -141,6 +166,113 @@ PS_EXPORT uint32_t ps_pixel_hash() {
     h = fnv1a(g_sim.renderer().panelPixels(k), (size_t)p.w * (size_t)p.h * 4u, h);
   }
   return (uint32_t)(h ^ (h >> 32));
+}
+
+// --- multi-node preview ------------------------------------------------------------------------
+
+// Master plus `nodes` display nodes. Faces are paired the way the real cube pairs them: adjacent,
+// never opposite, so each board's HUB75 ribbons stay short (docs/CUBE-PCB.md section 2.1).
+PS_EXPORT int ps_node_init(int nodes, int panelRes) {
+  if (nodes < 1 || nodes > kMaxNodes) return 0;
+  if (!g_sim.initScene(Simulation::kCube, 0, 0xC0FFEEu, panelRes)) return 0;
+  g_ready = true;
+
+  // (-Z,-X) (+Z,+Y) (+X,-Y): an all-adjacent perfect matching of the cube's faces.
+  static const int kPairs[3][2] = {{0, 2}, {1, 5}, {3, 4}};
+  const int perNode = 6 / nodes;
+  int next = 0;
+  for (int n = 0; n < nodes; ++n) {
+    DisplayNode& d = g_nodes[n];
+    d.faceCount = 0;
+    for (int k = 0; k < perNode && k < 2; ++k) {
+      d.faces[k] = (nodes == 3) ? kPairs[n][k] : next++;
+      ++d.faceCount;
+    }
+    if (!d.renderer.init(g_sim.geometry(), d.faces, d.faceCount)) return 0;
+    d.renderer.setExposure(kSplatExposure);
+    if (!d.heat.init(g_sim.volume())) return 0;
+    d.particles.clear();
+    d.lastStep = 0;
+    d.everReceived = false;
+  }
+  g_nodeCount = nodes;
+  g_masterStep = 0;
+  g_frameLen = 0;
+  g_nodesReady = true;
+  return 1;
+}
+
+PS_EXPORT int ps_node_count() { return g_nodesReady ? g_nodeCount : 0; }
+PS_EXPORT int ps_node_face_count(int n) {
+  return (g_nodesReady && n >= 0 && n < g_nodeCount) ? g_nodes[n].faceCount : 0;
+}
+PS_EXPORT int ps_node_face(int n, int k) {
+  if (!g_nodesReady || n < 0 || n >= g_nodeCount) return -1;
+  return (k >= 0 && k < g_nodes[n].faceCount) ? g_nodes[n].faces[k] : -1;
+}
+
+// The master advances and encodes. Returns the frame length, or 0 on failure.
+PS_EXPORT int ps_node_step(int substeps) {
+  if (!g_nodesReady) return 0;
+  for (int i = 0; i < substeps; ++i) {
+    g_sim.stepFixed();
+    ++g_masterStep;
+  }
+  FrameHeader h;
+  h.step = g_masterStep;
+  h.geomHash = geometryHash(g_sim.geometry());
+  g_frameLen = encodeFrame(h, g_sim.particles().view(), g_sim.field().view(),
+                           g_sim.volume().box(), g_frame, frameMaxBytes());
+  return g_frameLen;
+}
+
+// The encoded frame, for JS to copy, delay, corrupt or discard before delivering it.
+PS_EXPORT uint8_t* ps_node_frame_ptr() { return g_frame; }
+PS_EXPORT int ps_node_frame_len() { return g_frameLen; }
+PS_EXPORT uint32_t ps_node_master_step() { return g_masterStep; }
+
+// Hands a frame to one node. 1 if accepted, 0 if rejected -- and a rejected frame leaves the
+// node untouched, so it keeps drawing its previous picture.
+PS_EXPORT int ps_node_deliver(int n, const uint8_t* frame, int len) {
+  if (!g_nodesReady || n < 0 || n >= g_nodeCount) return 0;
+  DisplayNode& d = g_nodes[n];
+  FrameHeader h;
+  if (!decodeFrame(frame, len, g_sim.volume().box(), geometryHash(g_sim.geometry()), d.particles,
+                   d.heat, h)) {
+    return 0;
+  }
+  d.lastStep = h.step;
+  d.everReceived = true;
+  return 1;
+}
+
+// The failure mode that matters. With one authoritative simulation divergence is impossible, but a
+// node that misses frames goes STALE: its faces freeze while the others keep moving.
+PS_EXPORT uint32_t ps_node_last_step(int n) {
+  return (g_nodesReady && n >= 0 && n < g_nodeCount) ? g_nodes[n].lastStep : 0u;
+}
+PS_EXPORT int ps_node_ever_received(int n) {
+  return (g_nodesReady && n >= 0 && n < g_nodeCount && g_nodes[n].everReceived) ? 1 : 0;
+}
+
+PS_EXPORT void ps_node_render(int n) {
+  if (!g_nodesReady || n < 0 || n >= g_nodeCount) return;
+  DisplayNode& d = g_nodes[n];
+  d.renderer.render(d.particles.view(), d.heat.view(), g_sim.geometry());
+}
+
+PS_EXPORT const uint8_t* ps_node_panel_ptr(int n, int face) {
+  if (!g_nodesReady || n < 0 || n >= g_nodeCount) return nullptr;
+  return g_nodes[n].renderer.panelPixels(face);
+}
+
+// Drops a node to its boot state, so the page can show a restart recovering.
+PS_EXPORT void ps_node_reset(int n) {
+  if (!g_nodesReady || n < 0 || n >= g_nodeCount) return;
+  g_nodes[n].particles.clear();
+  g_nodes[n].heat.clear();
+  g_nodes[n].lastStep = 0;
+  g_nodes[n].everReceived = false;
 }
 
 }  // extern "C"

@@ -73,8 +73,11 @@ class Renderer {
   }
 
 #if PARTSIM_INTERNAL_PIXELS
-  // clear -> splat particles -> splat heat -> resolve every panel into the RGBA buffers.
-  void render(const Particles& p, const FieldGrid& f, const Geometry& g);
+  // clear -> splat particles -> splat heat -> resolve every driven panel into the RGBA buffers.
+  void render(ParticleView p, HeatView f, const Geometry& g);
+  void render(const Particles& p, const FieldGrid& f, const Geometry& g) {
+    render(p.view(), f.view(), g);
+  }
 #endif
 
   void clear();

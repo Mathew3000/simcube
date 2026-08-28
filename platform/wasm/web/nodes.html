@@ -1,0 +1,180 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>partsim — multi-node cube</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #05070a; color: #cfd8dc;
+               font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; }
+  #ui { position: fixed; top: 12px; left: 12px; z-index: 10; background: rgba(8,12,16,.86);
+        border: 1px solid #1b2634; border-radius: 4px; padding: 12px 14px; min-width: 300px; }
+  h1 { font-size: 13px; font-weight: 600; margin: 0 0 10px; letter-spacing: .04em;
+       text-transform: uppercase; color: #7f8c99; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .row label { flex: 0 0 92px; color: #8b98a6; }
+  input[type=range] { flex: 1; }
+  .val { flex: 0 0 46px; text-align: right; color: #e0e6eb; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { text-align: left; padding: 3px 6px 3px 0; }
+  th { color: #6f7c89; font-weight: 500; font-size: 11px; text-transform: uppercase;
+       letter-spacing: .06em; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: #4bbf73; }
+  .stale { color: #e0a33e; }
+  .dead { color: #d9534f; }
+  button { background: #16202b; color: #cfd8dc; border: 1px solid #24313f; border-radius: 3px;
+           padding: 3px 8px; cursor: pointer; font: inherit; }
+  button:hover { border-color: #3a4a5c; }
+  #note { margin-top: 10px; color: #6f7c89; font-size: 11.5px; line-height: 1.45; }
+  #err { position: fixed; inset: 0; display: none; place-items: center; background: #05070a;
+         color: #d9534f; padding: 40px; text-align: center; }
+</style>
+
+<div id="ui">
+  <h1>Multi-node cube</h1>
+  <div class="row">
+    <label>drop rate</label><input id="drop" type="range" min="0" max="100" value="0">
+    <span class="val" id="dropV">0%</span>
+  </div>
+  <div class="row">
+    <label>latency</label><input id="lat" type="range" min="0" max="20" value="0">
+    <span class="val" id="latV">0f</span>
+  </div>
+  <table>
+    <thead><tr><th>node</th><th>faces</th><th class="n">step</th><th class="n">behind</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="note"></div>
+</div>
+<div id="err"></div>
+
+<script type="module">
+import createPartsim from './public/partsim.mjs';
+import { createCubeView } from './cubeview.js';
+
+const RES = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('res') || '32', 10);
+  return (v === 32 || v === 64) ? v : 32;
+})();
+const NODES = 3;
+
+const mod = await createPartsim();
+
+if (!mod._ps_node_init(NODES, RES)) {
+  const e = document.getElementById('err');
+  e.style.display = 'grid';
+  e.textContent = `ps_node_init(${NODES}, ${RES}) failed — capacity too small for this resolution.`;
+  throw new Error('node init failed');
+}
+
+// Which node owns which face. The cube view is told this, so the geometry stays the single source
+// of truth for placement and the nodes only supply pixels.
+const ownerOf = new Map();
+const nodeFaces = [];
+for (let n = 0; n < NODES; n++) {
+  const faces = [];
+  for (let k = 0; k < mod._ps_node_face_count(n); k++) {
+    const f = mod._ps_node_face(n, k);
+    faces.push(f);
+    ownerOf.set(f, n);
+  }
+  nodeFaces.push(faces);
+}
+
+const view = createCubeView(mod, {
+  panelPtr: (face) => mod._ps_node_panel_ptr(ownerOf.get(face), face),
+});
+
+// --- the simulated bus --------------------------------------------------------------------------
+// JS holds the frame bytes, which is what makes the fault injection real rather than pretended:
+// a dropped frame is a frame this array never delivers, not a flag the C++ side honours.
+const inflight = [];   // { frame: Uint8Array, deliverAt: frameCounter, node }
+let frameCounter = 0;
+let dropRate = 0, latency = 0;
+const stats = Array.from({ length: NODES }, () => ({ delivered: 0, dropped: 0, rejected: 0 }));
+
+const dropEl = document.getElementById('drop');
+const latEl = document.getElementById('lat');
+dropEl.oninput = () => { dropRate = +dropEl.value / 100;
+                         document.getElementById('dropV').textContent = dropEl.value + '%'; };
+latEl.oninput = () => { latency = +latEl.value;
+                        document.getElementById('latV').textContent = latEl.value + 'f'; };
+
+const rows = document.getElementById('rows');
+const cells = [];
+for (let n = 0; n < NODES; n++) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${n}</td><td>${nodeFaces[n].join(',')}</td>` +
+                 `<td class="n"></td><td class="n"></td>` +
+                 `<td><button data-n="${n}">restart</button></td>`;
+  rows.append(tr);
+  cells.push({ step: tr.children[2], behind: tr.children[3], row: tr });
+}
+rows.onclick = (e) => {
+  const n = e.target.dataset?.n;
+  if (n !== undefined) mod._ps_node_reset(+n);
+};
+
+document.getElementById('note').textContent =
+  `One authoritative simulation, so faces cannot disagree — the failure mode is staleness. ` +
+  `Drop frames and watch a node's faces freeze while the others move.`;
+
+function pump() {
+  frameCounter++;
+
+  // The master advances two fixed steps per displayed frame, matching the firmware's 30fps against
+  // a 60Hz physics rate.
+  const len = mod._ps_node_step(2);
+  const src = new Uint8Array(mod.HEAPU8.buffer, mod._ps_node_frame_ptr(), len);
+
+  for (let n = 0; n < NODES; n++) {
+    if (Math.random() < dropRate) { stats[n].dropped++; continue; }
+    // Copy, because the master's buffer is overwritten next frame and a delayed frame must carry
+    // the bytes it was sent with.
+    inflight.push({ bytes: src.slice(), node: n, deliverAt: frameCounter + latency });
+  }
+
+  for (let i = inflight.length - 1; i >= 0; i--) {
+    const p = inflight[i];
+    if (p.deliverAt > frameCounter) continue;
+    inflight.splice(i, 1);
+    // Hand the bytes back through the heap, since the ABI takes a pointer.
+    const scratch = mod._ps_node_frame_ptr();
+    // Deliver from a heap copy at a scratch address: reuse the master buffer only when the frame
+    // is the current one, otherwise stage it.
+    if (p.bytes.length === len && p.deliverAt === frameCounter && latency === 0) {
+      if (mod._ps_node_deliver(p.node, scratch, len)) stats[p.node].delivered++;
+      else stats[p.node].rejected++;
+    } else {
+      const tmp = mod._malloc(p.bytes.length);
+      mod.HEAPU8.set(p.bytes, tmp);
+      if (mod._ps_node_deliver(p.node, tmp, p.bytes.length)) stats[p.node].delivered++;
+      else stats[p.node].rejected++;
+      mod._free(tmp);
+    }
+  }
+
+  for (let n = 0; n < NODES; n++) mod._ps_node_render(n);
+}
+
+function hud() {
+  const master = mod._ps_node_master_step();
+  for (let n = 0; n < NODES; n++) {
+    const step = mod._ps_node_last_step(n);
+    const behind = master - step;
+    const c = cells[n];
+    c.step.textContent = mod._ps_node_ever_received(n) ? step : '—';
+    c.behind.textContent = mod._ps_node_ever_received(n) ? behind : 'never';
+    c.behind.className = 'n ' + (!mod._ps_node_ever_received(n) ? 'dead'
+                                : behind > 6 ? 'stale' : 'ok');
+  }
+}
+
+function frame() {
+  pump();
+  for (const p of view.panels) p.tex.needsUpdate = true;
+  view.controls.update();
+  view.render();
+  hud();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>

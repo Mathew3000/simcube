@@ -11,8 +11,12 @@ import { UnrealBloomPass } from './vendor/jsm/postprocessing/UnrealBloomPass.js'
 //
 // Every quad is placed from ps_panel_basis, never from a hardcoded cube layout, so the physics
 // and the visuals cannot disagree about where a panel is or which way it faces.
+// `panelPtr` resolves a face index to a pixel-buffer address. It defaults to the single-simulation
+// path; the multi-node page passes a resolver that routes each face to the display node that owns
+// it, so the same scene code shows either topology and cannot disagree about panel placement.
 export function createCubeView(mod, { canvasParent = document.body, frame = true,
-                                      bloom = true } = {}) {
+                                      bloom = true,
+                                      panelPtr = (i) => mod._ps_panel_ptr(i) } = {}) {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 1, 500);
   camera.position.set(46, 34, 62);
@@ -46,7 +50,7 @@ export function createCubeView(mod, { canvasParent = document.body, frame = true
     // DataTexture defaults to flipY = false, unpackAlignment = 1 and NearestFilter, which is
     // exactly right here: panel row 0 is the BOTTOM row (matching WebGL's bottom-left texture
     // origin) so no flip is needed, and nearest keeps LED pixels crisp instead of smearing.
-    const view = new Uint8Array(mod.HEAPU8.buffer, mod._ps_panel_ptr(i), w * h * 4);
+    const view = new Uint8Array(mod.HEAPU8.buffer, panelPtr(i), w * h * 4);
     const tex = new THREE.DataTexture(view, w, h, THREE.RGBAFormat);
     tex.needsUpdate = true;
 

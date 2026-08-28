@@ -15,6 +15,7 @@ add_executable(partsim_tests
   test_resolution.cpp
   test_renderstate.cpp
   test_simframe.cpp
+  test_multinode.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
