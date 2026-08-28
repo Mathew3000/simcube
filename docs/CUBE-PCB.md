@@ -421,6 +421,15 @@ expected to matter for a hand-held object, but both are untested.
   MOSI as a matched pair with a ground return in the harness.
 - **REQ-SPI-4** Fall back to 10 MHz if signal integrity disappoints — still 2× the required
   bandwidth. Design the harness so this is a firmware constant, not a rework.
+- **REQ-SPI-6** **A series resistor, 100–330 Ω, on each display node's MISO.** An SPI slave drives
+  MISO whenever its chip select is low, so the broadcast in REQ-M-4 — all three selects asserted at
+  once — puts three drivers on one net every frame. The frame path never reads MISO, but the
+  contention happens regardless of whether anyone listens. Three resistors make it current-limited
+  and harmless.
+
+  Without them the alternative is three separate transactions instead of one broadcast: correct,
+  but **75 % of the 20 MHz budget rather than 25 %**, and three times the master's DMA time. The
+  firmware has a `kBroadcast` switch for exactly that fallback.
 - **REQ-SPI-5** A dropped frame must be survivable: a display node holds its last frame. Each node
   shall report its last received step index so the master can flag a node falling behind. A stale
   face is visually obvious and otherwise silent in logs.

@@ -26,6 +26,11 @@ class FrameLink {
   // holds its previous one, which is the specified behaviour rather than a fallback.
   virtual int poll(uint8_t* buf, int cap) = 0;
 
+  // Zero-copy variant: returns a pointer into the carrier's own receive buffer, valid until the
+  // next poll. A frame is ~24KB and the decoder only reads it, so copying it again would double
+  // that for nothing -- which on a display node is 24KB of a 230KB budget.
+  virtual const uint8_t* pollDirect(int& len) { len = 0; return nullptr; }
+
   // Diagnostics, reported by the console. A link that silently drops is the failure this whole
   // design is trying to make visible.
   virtual uint32_t sent() const { return 0; }

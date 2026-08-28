@@ -19,7 +19,14 @@
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
 
+#include "FrameLink.h"
 #include "Lsm6dsox.h"
+#include "Role.h"
+#if !PARTSIM_QEMU
+#include "SpiFrameLink.h"
+#endif
+#include "partsim/RenderState.h"
+#include "partsim/SimFrame.h"
 #include "PanelDriver.h"
 #include "Pins.h"
 #include "partsim/MotionSource.h"
@@ -47,10 +54,66 @@ constexpr float kImuDt = 1.0f / 208.0f;
 
 // Static storage. ~125KB at the device capacity profile; see scripts/check_esp32_budget.sh,
 // which asserts the whole footprint fits internal SRAM before anything is ever flashed.
+// State by role, and strictly by role.
+//
+// A display node needs the GEOMETRY and the container BOX -- roughly half a kilobyte -- to place
+// splats and to dequantise positions. An earlier draft gave it a whole Simulation to obtain them,
+// which is 136.6KB for 0.5KB of use and exactly the mistake RenderState was written to prevent.
+#if defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+Geometry g_geom;
+SimVolume g_vol;
+#define PS_GEOM g_geom
+#define PS_VOL g_vol
+#else
 Simulation g_sim;
+#define PS_GEOM g_sim.geometry()
+#define PS_VOL g_sim.volume()
+#endif
+
 PanelDriver g_panels;
 MotionSource g_motion;
 Lsm6dsox g_imu;
+
+// --- role ---------------------------------------------------------------------------------------
+// One image, every board. The role is read from strap pins at boot and decides which of the two
+// loops below runs; see Role.h for why unstrapped means master.
+//
+// PARTSIM_MULTINODE selects the split build. The single-board `cube` environment keeps the
+// Milestone 2 behaviour untouched -- it is what the 32x32 panels will be brought up on, and there
+// is no reason to make that path depend on code no hardware has exercised.
+#if defined(PARTSIM_PROFILE_ESP32_MASTER) || defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+#define PARTSIM_MULTINODE 1
+#else
+#define PARTSIM_MULTINODE 0
+#endif
+
+#if PARTSIM_MULTINODE
+Role g_role = Role::Master;
+NullFrameLink g_nullLink;
+FrameLink* g_link = &g_nullLink;
+#if !PARTSIM_QEMU
+SpiMasterLink g_spiMaster;
+SpiDisplayLink g_spiDisplay;
+#endif
+
+#ifdef PARTSIM_PROFILE_ESP32_MASTER
+// Master side only: the frame it encodes each step.
+uint8_t g_txFrame[frameMaxBytes()];
+uint32_t g_masterStep = 0;
+#endif
+
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+// Display side only: draw-only state, which is what keeps this node inside its SRAM budget.
+// No frame buffer of its own -- it decodes straight out of the link's DMA buffer via pollDirect.
+RenderParticles g_rxParticles;
+HeatBuffer g_rxHeat;
+Renderer g_rxRenderer;
+uint32_t g_rxLastStep = 0;
+uint32_t g_rxAccepted = 0;
+uint32_t g_rxRejected = 0;
+uint32_t g_rxStarved = 0;   // polls that found nothing: the node holds its last frame
+#endif
+#endif
 
 // --- IMU sample ring ---------------------------------------------------------------------------
 // Single producer (imuTask), single consumer (simTask), power-of-two, so the indices can wrap by
@@ -121,6 +184,103 @@ int pumpMotion() {
   return n;
 }
 
+#ifdef PARTSIM_PROFILE_ESP32_MASTER
+// The master's step index is the authoritative clock, so it steps a FIXED number of times per
+// frame rather than calling advance(wallDt). advance() drops backlog when it saturates, which would
+// make the step count a function of frame timing -- and every display node would then be comparing
+// its own progress against a clock that skips.
+void masterTask(void*) {
+  const TickType_t period = pdMS_TO_TICKS(1000 / kTargetFps);
+  const int substeps = (int)((1.0f / (float)kTargetFps) / kFixedDt + 0.5f);
+  TickType_t next = xTaskGetTickCount();
+  for (;;) {
+    const uint32_t t0 = micros();
+    pumpMotion();
+    if (!g_paused) {
+      if (g_motion.seeded()) {
+        g_sim.setGravityObject(g_motion.gravityObject());
+        g_sim.setContainerAccel(g_motion.containerAccel());
+      }
+      for (int i = 0; i < substeps; ++i) {
+        g_sim.stepFixed();
+        ++g_masterStep;
+      }
+      g_stats.substeps = substeps;
+    }
+    const uint32_t t1 = micros();
+
+    FrameHeader h;
+    h.step = g_masterStep;
+    h.geomHash = geometryHash(g_sim.geometry());
+    h.paletteA = (uint8_t)g_sim.scene();
+    const int len = encodeFrame(h, g_sim.particles().view(), g_sim.field().view(),
+                                g_sim.volume().box(), g_txFrame, frameMaxBytes());
+    if (len > 0) g_link->send(g_txFrame, len);
+    const uint32_t t2 = micros();
+
+    const float k = 0.1f;
+    g_stats.simMs += ((float)(t1 - t0) * 0.001f - g_stats.simMs) * k;
+    g_stats.renderMs += ((float)(t2 - t1) * 0.001f - g_stats.renderMs) * k;  // encode + send
+    ++g_stats.frames;
+
+    if ((int32_t)(xTaskGetTickCount() - next) >= 0) {
+      next = xTaskGetTickCount(); ++g_overruns; vTaskDelay(1);
+    } else {
+      vTaskDelayUntil(&next, period);
+    }
+  }
+}
+
+#endif  // master
+
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+// A display node: receive, decode, splat its own faces, blit. No solver, no field advection, no
+// IMU. A poll that finds nothing, or a frame that fails to decode, leaves the previous frame in
+// place -- which is the specified behaviour, not a fallback.
+void displayTask(void*) {
+  const TickType_t period = pdMS_TO_TICKS(1000 / kTargetFps);
+  TickType_t next = xTaskGetTickCount();
+  for (;;) {
+    const uint32_t t0 = micros();
+    int len = 0;
+    const uint8_t* frame = g_link->pollDirect(len);
+    if (frame && len > 0) {
+      FrameHeader h;
+      if (decodeFrame(frame, len, PS_VOL.box(), geometryHash(PS_GEOM), g_rxParticles, g_rxHeat,
+                      h)) {
+        g_rxLastStep = h.step;
+        ++g_rxAccepted;
+      } else {
+        ++g_rxRejected;
+      }
+    } else {
+      ++g_rxStarved;
+    }
+    const uint32_t t1 = micros();
+
+    g_rxRenderer.accumulate(g_rxParticles.view(), g_rxHeat.view(), PS_GEOM);
+    const uint32_t t2 = micros();
+#if !PARTSIM_QEMU
+    g_panels.present(g_rxRenderer, PS_GEOM);
+#endif
+    const uint32_t t3 = micros();
+
+    const float k = 0.1f;
+    g_stats.simMs += ((float)(t1 - t0) * 0.001f - g_stats.simMs) * k;   // receive + decode
+    g_stats.renderMs += ((float)(t2 - t1) * 0.001f - g_stats.renderMs) * k;
+    g_stats.blitMs += ((float)(t3 - t2) * 0.001f - g_stats.blitMs) * k;
+    ++g_stats.frames;
+
+    if ((int32_t)(xTaskGetTickCount() - next) >= 0) {
+      next = xTaskGetTickCount(); ++g_overruns; vTaskDelay(1);
+    } else {
+      vTaskDelayUntil(&next, period);
+    }
+  }
+}
+#endif  // display
+
+#if !PARTSIM_MULTINODE
 void simTask(void*) {
   const TickType_t period = pdMS_TO_TICKS(1000 / kTargetFps);
   TickType_t next = xTaskGetTickCount();
@@ -189,6 +349,7 @@ void simTask(void*) {
     }
   }
 }
+#endif  // !PARTSIM_MULTINODE
 
 // --- serial console ----------------------------------------------------------------------------
 
@@ -250,18 +411,37 @@ void printStats() {
   Serial.printf("frames %u, overruns %u (%.1f%%)\n", (unsigned)g_stats.frames,
                 (unsigned)g_overruns,
                 g_stats.frames ? 100.0f * (float)g_overruns / (float)g_stats.frames : 0.0f);
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  // A display node has no scene and no particles of its own: it draws whatever the last accepted
+  // frame contained, which is the point of an authoritative master.
+  Serial.printf("received particles %d/%d (drawn from the last accepted frame)\n",
+                g_rxParticles.count(), kMaxParticles);
+#else
   Serial.printf("particles %d/%d   scene %d (%s)%s\n", g_sim.particleCount(), kMaxParticles,
                 g_sim.scene(), sceneAt(g_sim.scene()).name,
                 g_sim.transitioning() ? "  [transitioning]" : "");
+#endif
   Serial.printf("internal heap free %u B, largest block %u B\n",
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   Serial.printf("psram free %u B\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+#if PARTSIM_MULTINODE
+  Serial.printf("role %s, link %s\n", roleName(g_role), g_link->name());
+#ifdef PARTSIM_PROFILE_ESP32_MASTER
+  Serial.printf("master step %u, frames sent %u, link errors %u\n", (unsigned)g_masterStep,
+                (unsigned)g_link->sent(), (unsigned)g_link->errors());
+#else
+  Serial.printf("last step %u, accepted %u, rejected %u, starved %u, link errors %u\n",
+                (unsigned)g_rxLastStep, (unsigned)g_rxAccepted, (unsigned)g_rxRejected,
+                (unsigned)g_rxStarved, (unsigned)g_link->errors());
+#endif
+#endif
 }
 
 // The third target of the cross-target determinism check. The host and WASM builds already agree
 // bit-for-bit; this is the same scripted sequence at the same capacities, so the number below
 // must equal the contents of scripts/golden_hash_esp32.txt.
+#ifndef PARTSIM_PROFILE_ESP32_DISPLAY
 void runGolden() {
 #ifdef PARTSIM_NONDETERMINISTIC_FP
   Serial.println(F("NOTE: built with -ffp-contract=fast, so this hash is EXPECTED to differ."));
@@ -293,6 +473,8 @@ void runGolden() {
 }
 
 
+#endif  // !display
+
 // --- benchmark ---------------------------------------------------------------------------------
 // The whole point of being able to run this on a bare devkit.
 //
@@ -304,6 +486,7 @@ void runGolden() {
 //
 // So this answers the one question that has never been answered: how many particles actually fit a
 // frame. Everything else in the budget is downstream of it.
+#ifndef PARTSIM_PROFILE_ESP32_DISPLAY
 void runBench() {
   const int counts[] = {320, 640, 960, 1280};
   const int reps = 30;
@@ -381,6 +564,8 @@ void runBench() {
   g_sim.setAutoCycle(true);
 }
 
+#endif  // !display
+
 void handleLine(char* line) {
   // Tokenise in place; no String, no allocation.
   char* argv[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -401,6 +586,11 @@ void handleLine(char* line) {
       break;
 
     case 's':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      // Scene is the master's decision and arrives in the frame header. A display node choosing
+      // its own would be the one way this architecture could produce disagreeing faces.
+      Serial.println(F("scene is set on the master; a display node only draws what it receives"));
+#else
       if (argc >= 2) {
         const int n = atoi(argv[1]);
         if (n >= 0 && n < sceneCount()) {
@@ -413,11 +603,16 @@ void handleLine(char* line) {
         for (int i = 0; i < sceneCount(); ++i)
           Serial.printf("  %d %s%s\n", i, sceneAt(i).name, i == g_sim.scene() ? "  <--" : "");
       }
+#endif
       break;
 
     case 'c':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      Serial.println(F("auto-cycle is set on the master"));
+#else
       g_sim.setAutoCycle(!g_sim.autoCycle());
       Serial.printf("auto-cycle %s\n", g_sim.autoCycle() ? "on" : "off");
+#endif
       break;
 
     case 'b':
@@ -455,11 +650,19 @@ void handleLine(char* line) {
       break;
 
     case 'g':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      Serial.println(F("no golden sequence on a display node: it runs no solver"));
+#else
       runGolden();
+#endif
       break;
 
     case 'x':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      Serial.println(F("no benchmark on a display node: it runs no solver"));
+#else
       runBench();
+#endif
       break;
 
     case 'p':
@@ -501,7 +704,33 @@ void setup() {
   btStop();
 #endif
 
+#if PARTSIM_MULTINODE
+  g_role = readRole(pins::kRoleA, pins::kRoleB);
+  Serial.printf("role: %s\n", roleName(g_role));
+#endif
+
   const int mode = (kFaces == 1) ? Simulation::kSinglePanel : Simulation::kCube;
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  // A display node builds only the GEOMETRY and the container box. Every node holds the FULL panel
+  // table even though this one draws two faces: Geometry::bounds() derives the container from it
+  // and both ends must agree on that container exactly, or the master's quantised positions mean
+  // something different here than they did there.
+  (void)mode;
+  g_geom = Geometry::cube(kPanelRes, pitchFor(kPanelRes));
+  if (g_geom.count() != 6 || !g_vol.build(g_geom, kSlabDepth, kCellSize)) {
+    Serial.println(F("FATAL: geometry init failed"));
+    for (;;) delay(1000);
+  }
+  Serial.printf("display node: box %.1f units, geometry hash %04x\n", g_vol.box().size().x,
+                geometryHash(g_geom));
+#else
+#if PARTSIM_MULTINODE
+  // The master simulates but renders nothing.
+  {
+    static const int none[1] = {0};
+    g_sim.setRenderSet(none, 0);
+  }
+#endif
   if (!g_sim.initScene(mode, 0, 1, kPanelRes)) {
     Serial.println(F("FATAL: simulation init failed -- capacities too small for this geometry"));
     for (;;) delay(1000);
@@ -509,7 +738,13 @@ void setup() {
   g_sim.setAutoCycle(true);
   Serial.printf("simulation: %d particles, capacity %d\n", g_sim.particleCount(),
                 g_sim.capacity());
+#endif
 
+#if PARTSIM_MULTINODE
+  if (!roleDrivesPanels(g_role)) {
+    Serial.println(F("master: no panels on this board"));
+  } else
+#endif
 #if PARTSIM_QEMU
   // No panels under emulation. QEMU models the CPU, RAM, flash, timers and UART, but not LCD_CAM
   // or GDMA -- and the HUB75 library spins waiting for a DMA completion that never arrives, which
@@ -517,15 +752,37 @@ void setup() {
   // testable here; everything above it is.
   Serial.println(F("QEMU build: panel driver skipped (no LCD_CAM/GDMA model)"));
 #else
-  if (!g_panels.begin(g_sim.geometry(), kColorDepthBits, kDefaultBrightness)) {
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  {
+    const RoleFaces rf = facesFor(g_role);
+    if (!g_rxRenderer.init(PS_GEOM, rf.face, rf.count) || !g_rxHeat.init(PS_VOL)) {
+      Serial.println(F("FATAL: display node state init failed"));
+      for (;;) delay(1000);
+    }
+    g_rxRenderer.setExposure(kSplatExposure);
+    g_rxParticles.clear();
+  }
+#endif
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  // Drive only this node's own faces. The panel table has six entries; this board has two tiles.
+  {
+    const RoleFaces rf = facesFor(g_role);
+    if (!g_panels.begin(PS_GEOM, rf.face, rf.count, kColorDepthBits, kDefaultBrightness)) {
+      Serial.println(F("FATAL: HUB75 init failed -- check Pins.h against the wiring"));
+      for (;;) delay(1000);
+    }
+  }
+#else
+  if (!g_panels.begin(PS_GEOM, kColorDepthBits, kDefaultBrightness)) {
     Serial.println(F("FATAL: HUB75 init failed -- check Pins.h against the wiring"));
     for (;;) delay(1000);
   }
 #endif
+#endif
 #if !PARTSIM_QEMU
   Serial.printf("panels: chain %dx%d, rows %s\n", g_panels.chain().chainWidth(),
                 g_panels.chain().chainHeight(),
-                g_panels.allRunsHorizontal(g_sim.geometry()) ? "all horizontal (fast blit)"
+                g_panels.allRunsHorizontal(PS_GEOM) ? "all horizontal (fast blit)"
                                                              : "some vertical (slower blit)");
 #endif
 
@@ -554,8 +811,39 @@ void setup() {
   Serial.println(F("QEMU: done"));
 #endif
 
+#if PARTSIM_MULTINODE
+  // One image, every board. Which loop runs is a fact about the strap pins.
+#ifdef PARTSIM_PROFILE_ESP32_MASTER
+  {
+#if !PARTSIM_QEMU
+    const int cs[3] = {pins::kSpiCsOut[0], pins::kSpiCsOut[1], pins::kSpiCsOut[2]};
+    if (g_spiMaster.begin(pins::kSpiSck, pins::kSpiMosi, pins::kSpiMiso, cs, 3, 20 * 1000 * 1000)) {
+      g_link = &g_spiMaster;
+    } else {
+      Serial.println(F("WARNING: SPI host init failed; running with a null link"));
+    }
+#endif
+    xTaskCreatePinnedToCore(masterTask, "master", 6144, nullptr, 2, nullptr, 1);
+  }
+#endif
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  {
+#if !PARTSIM_QEMU
+    if (g_spiDisplay.begin(pins::kSpiSck, pins::kSpiMosi, pins::kSpiMiso, pins::kSpiCsIn)) {
+      g_link = &g_spiDisplay;
+    } else {
+      Serial.println(F("WARNING: SPI device init failed; this node will never receive a frame"));
+    }
+#endif
+    xTaskCreatePinnedToCore(displayTask, "display", 6144, nullptr, 2, nullptr, 1);
+  }
+#endif
+#endif  // PARTSIM_MULTINODE
+
+#if !PARTSIM_MULTINODE
   // 6KB of stack: the solver recurses nowhere and every pool is static, so this is generous.
   xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, nullptr, 1);
+#endif
 
   Serial.printf("internal heap free after init: %u B\n",
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
