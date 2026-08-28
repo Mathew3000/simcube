@@ -4,7 +4,9 @@
 **[M]** is measured from the firmware in this repo; every figure marked **[A]** is an assumption
 that must be confirmed against a real panel datasheet or on the bench before layout is committed.
 
-**Revision:** 0.1 — first issue.
+**Revision:** 0.2 — single-board layout, 4S1P 18650 pack, 12 A display rail, 5-pin magnetic
+dock, IMU offset compensation. Supersedes 0.1's 3S1P 21700 pack and 8 A rail. Topology and PSRAM
+corrections live in [RESOURCES.md](RESOURCES.md) §1–2.
 
 ---
 
@@ -44,10 +46,11 @@ mount at their own panel pair, with ~10 cm ribbons instead of ~40 cm.
 | Module | ESP32-S3-WROOM-1**U** N16R8 (16 MB flash, 8 MB **octal** PSRAM), external antenna on master |
 | Panels | 6 × 64×64 **P2**, 1/32 scan, HUB75**E** (the E address line is required) |
 | Cube | ~128 mm faces, ~13 cm outside, ~1.3–1.6 kg all-in |
-| Battery | 3S1P 21700, 5 Ah — 55.5 Wh nominal, ~50 Wh usable, ~210 g of cells |
-| Runtime | ~2 h at brightness 96, auto-dimming below 20% charge |
-| Charging | USB-C PD sink, 20 V. **Charge or run, not both** — see §5.3 |
-| Distribution | Raw pack voltage (9.0–12.6 V) to the display boards; 5 V regulated **locally** |
+| Battery | **4S1P 18650**, ≥3.5 Ah — 50.4 Wh nominal, ~45 Wh usable, ~188 g of cells, removable holders |
+| Runtime | **1.79 h** at brightness 96, auto-dimming below 20% charge |
+| Charging | USB-C PD sink, 20 V, plus a **5-pin magnetic dock**. **Charge or run, not both** — see §5.3 |
+| 5 V rail | **12 A per display board**, so no real scene is ever brightness-limited — see §4.5 |
+| Distribution | Raw pack voltage (**12.0–16.8 V**) to the display boards; 5 V regulated **locally** |
 | Board count | **Open** — 1, 2 or 3 display boards. See [RESOURCES.md](RESOURCES.md) §2 |
 | Inter-board | SPI, master as host, 20 MHz, DMA, broadcast to all three at once |
 | Cube-to-cube | ESP-NOW, **master only** (beaker mode chaining) |
@@ -88,11 +91,11 @@ in the firmware suggest otherwise.
               +-------+--------+
                       |
         +-------------+--------------+
-        |  3S1P 21700  5Ah  55.5Wh   |
-        |  BQ76920 AFE: protection,   |
+        |  4S1P 18650  3.5Ah 50.4Wh  |
+        |  BQ76920 AFE (3-5S):        |
         |  balancing, coulomb count   |
         +-------------+--------------+
-                      | VPACK 9.0 - 12.6 V
+                      | VPACK 12.0 - 16.8 V
               +-------+--------+
               | load switch    |  opened during fast charge (§5.3)
               +-------+--------+
@@ -100,7 +103,7 @@ in the firmware suggest otherwise.
      +----------------+----------------+----------------+
      |                |                |                |
  CUBE-MASTER     CUBE-DISPLAY-A   CUBE-DISPLAY-B   CUBE-DISPLAY-C
- 3V3 buck        5V buck 8A       5V buck 8A       5V buck 8A
+ 3V3 buck        5V buck 12A      5V buck 12A      5V buck 12A
  ESP32-S3        3V3 buck         3V3 buck         3V3 buck
  LSM6DSOX        ESP32-S3         ESP32-S3         ESP32-S3
  ext. antenna    |                |                |
@@ -145,12 +148,12 @@ after any renderer change, because REQ-PWR-1 is sized against it.
 Assumes 20 W max per panel at full white and a 1.5 W/panel scan-logic baseline. **Both need
 confirming against the panels actually purchased — panel ratings vary widely at the same pitch.**
 
-| condition | panels | + electronics, ÷92 % buck | pack current @ 11.1 V |
+| condition | panels | + electronics, ÷92 % buck | pack current @ 14.8 V |
 |---|---|---|---|
-| brightness 96, kettle | 21.9 W | **25.3 W** | 2.28 A |
-| brightness 160, kettle | 30.6 W | 34.7 W | 3.13 A |
-| brightness 255, kettle | 43.4 W | **48.6 W** | 4.37 A |
-| **all white, brightness 255** | 120.0 W | **131.8 W** | **11.9 A** |
+| brightness 96, kettle | 21.9 W | **25.3 W** | 1.71 A |
+| brightness 160, kettle | 30.6 W | 34.7 W | 2.35 A |
+| brightness 255, kettle | 43.4 W | **48.6 W** | 3.28 A |
+| **all white, brightness 255** | 120.0 W | **131.8 W** | **8.9 A** |
 
 Electronics: 4 × ESP32-S3 at ~0.25 W plus radio duty ≈ 1.3 W total.
 
@@ -159,16 +162,55 @@ Electronics: 4 × ESP32-S3 at ~0.25 W plus radio duty ≈ 1.3 W total.
 The 5.2× spread between the design case and a white screen is too wide to size hardware for.
 
 - **REQ-PWR-1** Firmware shall compute the average picture level per frame and reduce brightness so
-  system draw never exceeds **60 W** (5.4 A pack). The accumulation buffers already hold everything
+  system draw never exceeds **60 W** (4.05 A pack). The accumulation buffers already hold everything
   needed — this is a sum over the resolve pass, not new measurement hardware.
 - **REQ-PWR-2** Pack wiring, fusing and the load switch shall be rated **15 A** regardless, so a
   firmware fault or a solid-white diagnostic browns out rather than damaging anything.
-- **REQ-PWR-3** Each display board's 5 V rail shall deliver **8 A continuous** — the all-white draw
-  for two panels — so a white test pattern during bring-up is safe.
+- **REQ-PWR-3** Each display board's 5 V rail shall deliver **12 A continuous**, sized for a board
+  driving all six panels. Derivation in §4.4. Deliberately generous: it is the point at which the
+  brightness cap stops constraining anything you would actually want to display.
+- **REQ-PWR-4** **Soft-start on the 5 V rail.** Six panels carry ≥6000 µF of local bulk
+  (REQ-D-5); without a controlled ramp the converter current-limits and hiccups at power-on rather
+  than starting.
 
-### 4.4 Why distribute at pack voltage
+### 4.4 Sizing the 5 V rail — why 12 A
 
-At 11.1 V the whole cube draws 2.3 A typical. At 5 V the same power is 5.1 A, and a single central
+5 V current for **one board driving all six panels**, by brightness and content duty. The
+scan-logic baseline is 1.8 A and is independent of both; LEDs add up to 22.2 A at full white.
+
+| brightness | kettle, 31 % | water tank, 24 % | all white |
+|---|---|---|---|
+| 64 | 3.53 A | 3.13 A | 7.37 A |
+| 96 *(design case)* | **4.39 A** | 3.80 A | 10.16 A |
+| 128 | 5.25 A | 4.46 A | 12.94 A |
+| 160 | 6.11 A | 5.13 A | 15.73 A |
+| 255 *(full)* | **8.68 A** | 7.10 A | **24.00 A** |
+
+What each rail size actually buys:
+
+| rail | all-white up to brightness | worst real scene up to brightness |
+|---|---|---|
+| 8 A | 71 | **230 — cannot reach full brightness** |
+| 10 A | 94 | 255 |
+| **12 A** | **117** | **255, with headroom** |
+| 15 A | 152 | 255 |
+
+**8 A is the wrong number, and that is the whole argument.** It cannot run the measured worst-case
+scene at full brightness, so the APL limiter would be intervening on *real content* — constraining
+what the object is allowed to look like rather than merely guarding against pathological input. At
+12 A every real scene runs at brightness 255 untouched, and the limiter engages only above
+brightness 117 on near-white synthetic content, which no scene produces.
+
+Turning brightness down remains the right *operating* policy, and REQ-PWR-1 still enforces a 60 W
+system cap. The 12 A rail is what makes that a choice rather than a constraint.
+
+Thermal consequence: at 92 % efficiency a 12 A output dissipates **5.2 W** in the converter — 3.8 W
+at the 8.68 A worst real scene, 1.9 W at the design case. That is a meaningful heat source inside a
+sealed ~1 L box; see REQ-THM-1 and REQ-THM-3.
+
+### 4.5 Why distribute at pack voltage
+
+At 14.8 V the whole cube draws 1.7 A typical. At 5 V the same power is 5.1 A, and a single central
 5 V rail for all six panels would have to carry 24 A at full white. Regulating locally on each
 display board means **that current never exists anywhere in the design**, thins the inter-board
 harness by 3× for the same power, and spreads converter heat across three boards instead of one.
@@ -179,17 +221,29 @@ harness by 3× for the same power, and spreads converter heat across three board
 
 ### 5.1 Pack
 
-- **REQ-BAT-1** 3S1P, 21700 Li-ion, ≥5 Ah, ≥10 A continuous discharge. 55.5 Wh nominal.
-- **REQ-BAT-2** Runtime at the design case shall be ≥2.0 h. Calculated: 50 Wh usable ÷ 25.3 W =
-  **1.98 h**. Marginal — if the panels measure worse than the 20 W **[A]** assumption, this is the
-  requirement that fails first.
-- **REQ-BAT-3** 3S, not 1S. A single cell would need a boost converter drawing 7 A at the design
-  case and 36 A at a white screen; 3S bucks down instead, and 11.1→5 V is a comfortable ratio.
+- **REQ-BAT-1** **4S1P**, 18650 Li-ion, ≥3.5 Ah, ≥6 A continuous discharge, in **removable
+  holders**. 50.4 Wh nominal, 12.0–16.8 V.
+- **REQ-BAT-2** Runtime at the design case shall be ≥1.75 h. Calculated: 45.4 Wh usable ÷ 25.3 W =
+  **1.79 h**. Marginal — if the panels measure worse than the 20 W **[A]** assumption, this is the
+  requirement that fails first. **Two cells is not a configuration:** 22.7 Wh gives 0.90 h. Build
+  the holders for four and treat two as bring-up only.
+- **REQ-BAT-3** **4S1P, and specifically not 2S2P**, because the holders are removable. A parallel
+  pair accepts a cell at a different state of charge with an inrush limited only by cell internal
+  resistance — tens of amps, enough to stress cells and weld holder contacts, and nothing in the
+  design can prevent a user doing it. Series-only has no parallel path; series mismatch is what the
+  AFE is for. 2S2P is the better choice only for a welded pack, where cells are matched once at
+  assembly.
+- **REQ-BAT-3a** Not 1S. A single cell would need a boost converter drawing 7 A at the design case
+  and 36 A at a white screen; 4S bucks down instead. 14.8→5 V also halves the pack current versus
+  2S for the same power (1.71 A against 3.42 A at the design case), which thins the harness.
 - **REQ-BAT-4** Pack shall stay **under 100 Wh** so the object remains air-travel legal as carry-on
-  without airline approval. 55.5 Wh has ample margin.
-- **REQ-BAT-5** Cell-level protection and balancing via a dedicated AFE (BQ76920 or equivalent):
-  over-voltage, under-voltage, over-current, short-circuit, cell balancing.
-- **REQ-BAT-6** Under-voltage lockout at 3.0 V/cell. Firmware shall step brightness down below
+  without airline approval. 50.4 Wh has ample margin, and six cells (75.6 Wh, 2.69 h) would still
+  fit under it if runtime matters more than 94 g.
+- **REQ-BAT-5** Cell-level protection and balancing via a dedicated AFE (BQ76920 or equivalent,
+  which covers 3–5S): over-voltage, under-voltage, over-current, short-circuit, cell balancing.
+- **REQ-BAT-5a** Per-cell fusing, and a soft-start on the pack output. Removable holders mean the
+  pack can be made and broken live.
+- **REQ-BAT-6** Under-voltage lockout at 3.0 V/cell (12.0 V pack). Firmware shall step brightness down below
   20 % state of charge rather than cutting out abruptly.
 - **REQ-BAT-7** State of charge by coulomb counting, not voltage. Li-ion's discharge curve is flat
   enough that voltage-only SoC is worthless across the middle 70 % of the pack.
@@ -200,8 +254,10 @@ harness by 3× for the same power, and spreads converter heat across three board
   firmware runs and a bricked module can still be charged.
 - **REQ-CHG-2** Request 20 V. Fall back gracefully to 15 V/9 V/5 V with a proportionally reduced
   charge current; **never** assume a 100 W adapter is present.
-- **REQ-CHG-3** Charge at 2.5 A (0.5 C) to 12.6 V CC/CV. ~31.5 W at the top of charge, well inside
-  a 20 V/3 A (60 W) adapter. Full charge from empty ≈ **2.5 h** including the CV tail.
+- **REQ-CHG-3** Charge at 1.75 A (0.5 C) to **16.8 V** CC/CV. ~29 W at the top of charge, inside a
+  20 V/3 A (60 W) adapter. Full charge from empty ≈ **2.5 h** including the CV tail. Note 20 V in
+  to 16.8 V out is a narrow buck ratio — a buck-boost charger (REQ-CHG-4) removes the concern and
+  also lets 9 V and 15 V sources work.
 - **REQ-CHG-4** Charger IC shall be multi-cell capable with I2C telemetry (BQ25792 or equivalent),
   so charge state is readable by firmware and reportable over the console.
 - **REQ-CHG-5** Thermistor on the pack, wired to the charger's TS input. Charging shall be
@@ -224,6 +280,38 @@ which is exactly when an ambient object would most like to be lit.
 - **REQ-CHG-8** Simultaneous charge and discharge through the pack shall be avoided — it defeats
   the charger's termination detection and confuses coulomb counting.
 
+### 5.4 The magnetic dock
+
+A magnetic connector on the cube's edge carrying power and USB, so setting the cube down charges it
+and connects the console with no plug to find.
+
+- **REQ-DOCK-1** **Five pins, not four:** VBUS, GND, D+, D− and **one CC**. Four pins leaves no CC
+  line, which means no PD negotiation and a hard 5 V ceiling. USB-C needs CC1 *and* CC2 only to
+  detect cable flip — a magnetic connector cannot flip, so a single CC is sufficient for a sink.
+- **REQ-DOCK-2** Voltage matters more than pin count, because magnetic contacts are typically rated
+  2–3 A. Through 2 A per pin, against 45 Wh usable:
+
+  | negotiated | power | charge time |
+  |---|---|---|
+  | 5 V | 10 W | 5.0 h |
+  | 9 V | 18 W | 2.8 h |
+  | 20 V | 40 W | **1.2 h** |
+
+  If PD across the dock proves troublesome, the acceptable fallback is to split the roles: the
+  USB-C receptacle does fast charging and development, and the dock is a 5 V overnight cradle.
+- **REQ-DOCK-3** **The cube side shall be a pure sink** — high-impedance inputs presenting no
+  voltage of its own. Exposed contacts on an object that gets set down on desks and metal must be
+  inert to a coin or a key. The dock presents power; the cube never does.
+- **REQ-DOCK-4** Reverse-polarity protection on the dock input regardless of magnet keying, which
+  is a convention rather than a guarantee. ESD protection per REQ-SAF-5.
+- **REQ-DOCK-5** USB across the dock is **full-speed only (12 Mbps)**, which is what makes pogo
+  pins viable at all — the ESP32-S3's USB peripheral is full-speed, so there is no high-speed
+  differential pair to get wrong. Route D+/D− as a pair with a ground return anyway.
+- **REQ-DOCK-6** Data and power are simultaneous and independent — that is ordinary USB and needs
+  no special provision. What *does* need provision: the master's 3.3 V rail shall stay up while the
+  display rails are switched off for charging (REQ-CHG-6), so the console is alive exactly when the
+  cube is docked.
+
 ---
 
 ## 6. CUBE-MASTER
@@ -235,9 +323,13 @@ which is exactly when an ambient object would most like to be lit.
 - **REQ-M-2** LSM6DSOX 6-DOF IMU on I2C, configured ±8 g / ±500 dps at 208 Hz. **±8 g is not
   negotiable** — a hand-shaken cube clips a ±2 g part, and it clips exactly during the interaction
   the object exists for.
-- **REQ-M-3** The IMU shall be mounted as close to the **cube's geometric centroid** as the
-  mechanical design allows, and its axis orientation recorded. Feeding only gravity already omits
-  Coriolis and centrifugal terms; an off-centre IMU adds a spurious centrifugal signal on top.
+- **REQ-M-3** The IMU cannot sit at the centroid on a single-board layout — four 18650 holders and
+  the board occupy it. Its **offset from the centroid shall therefore be a recorded calibration
+  constant**, and firmware shall subtract the rigid-body terms:
+  `a_centroid = a_measured − ω×(ω×r) − ω̇×r`, with ω and ω̇ already available from the gyro.
+  Without this, an IMU 40 mm off-centre reports spurious centrifugal acceleration during exactly
+  the shaking the object exists for. A satellite IMU board at the centre on an I²C stub is the
+  fallback if the compensation disappoints.
 - **REQ-M-4** SPI host: SCK, MOSI, MISO and **three individual CS lines**. Broadcast asserts all
   three CS at once, so one payload reaches all nodes; individual CS is for polling status on MISO.
 - **REQ-M-5** Drives no panels. Its spare SRAM and its whole CPU budget are why the radio and the
@@ -257,9 +349,10 @@ which is exactly when an ambient object would most like to be lit.
 - **REQ-D-2** Two HUB75E connectors, each able to drive a chain of **one to three** panels, so the
   same board serves a 1-, 2- or 3-board cube and the topology is chosen at bring-up rather than at
   layout. Both connectors share all 14 HUB75 signals — panels chain, they do not each need a port.
-- **REQ-D-3** 5 V synchronous buck, input 9.0–12.6 V. **≥8 A** if the board is fixed at two
-  panels; **≥12 A** if it may drive up to six (the flexible layout in RESOURCES.md §2), which also
-  requires the APL cap to be enforced from boot. See REQ-PWR-3.
+- **REQ-D-3** 5 V synchronous buck, input **12.0–16.8 V** (4S pack), **≥12 A continuous**, with
+  soft-start. Sized for a board driving all six panels; §4.4 has why 8 A is not enough, REQ-PWR-4
+  the soft-start. Requires the APL cap enforced from boot (REQ-PWR-1), including during the
+  bring-up test pattern.
 - **REQ-D-4** 3.3 V buck for the module.
 - **REQ-D-5** ≥1000 µF of local bulk capacitance on the 5 V rail per panel, close to the
   connectors. Panel inrush at power-on is substantial and the harness has inductance.
@@ -293,7 +386,7 @@ which is exactly when an ambient object would most like to be lit.
 
 ### 8.2 Power harness
 
-- **REQ-H-1** Pack voltage to each display board on ≥20 AWG, fused or eFused per board.
+- **REQ-H-1** Pack voltage to each display board on ≥20 AWG (4.05 A at the 60 W cap), fused or eFused per board.
 - **REQ-H-2** **Never** power a panel through another panel's pigtail. Each panel gets 5 V
   injection direct from its display board.
 - **REQ-H-3** Star ground at the master. Panel return currents are large and switch at 16 MHz;
@@ -343,9 +436,11 @@ That leaves IO1–18, IO21, IO38–42, IO47, IO48 — 26 pins, against the 20 a 
 ## 10. Mechanical and thermal
 
 - **REQ-MEC-1** Outside ~128 mm per face. With ~15 mm of panel and frame depth the usable interior
-  is roughly a **98 mm cube (~0.94 L)**. Three 21700 cells are 70 mm long and fit; verify before
-  committing to cell format.
-- **REQ-MEC-2** Target all-in mass **≤1.6 kg**: ~780 g panels, ~210 g cells, ~300 g frame and
+  is roughly a **98 mm cube (~0.94 L)**. Four 18650 cells are 65 mm long and sit comfortably in a
+  row — one reason 18650 beats 21700 here despite near-identical energy density. Verify the holder
+  footprint against the real frame: four holders plus a 12 A buck plus two HUB75 headers puts the
+  board near 80 x 80 mm, most of one internal face.
+- **REQ-MEC-2** Target all-in mass **≤1.6 kg**: ~780 g panels, ~188 g cells + ~40 g holders, ~300 g frame and
   boards. Above roughly 2 kg the object stops being shakeable and the IMU becomes a tilt sensor,
   which undercuts the primary interaction.
 - **REQ-MEC-3** Display boards mount at the shared edge of their face pair (§2.1).
@@ -402,7 +497,8 @@ Not a BOM — starting points, all to be confirmed for availability and second s
 | PD sink | STUSB4500 | autonomous, NVM-configured, works with no firmware |
 | Charger | BQ25792 | 1–4S buck-boost, I2C, integrated ADC |
 | Pack AFE | BQ76920 | 3–5S protection, balancing, current sense |
-| 5 V buck | ≥8 A synchronous, 16 V input | one per display board |
+| 5 V buck | ≥12 A synchronous, 20 V input, soft-start | one per display board; §4.4 |
+| Magnetic dock | 5-pin, ≥2 A/pin | VBUS, GND, D+, D−, **one CC** — §5.4 |
 | 3 V3 buck | 500 mA synchronous | per board; not an LDO |
 | HUB75 buffer | 74AHCT245 | footprint per connector, populate if needed |
 | Load switch | high-side eFuse with enable | REQ-CHG-6 |
@@ -431,4 +527,6 @@ Ordered by how much of the design they could invalidate.
 7. **Blit cost.** ~8192 `drawPixelRGB888` calls per node per frame at ~130 cycles each ≈ 4.4 ms,
    about 13 % of a 30 fps frame. Affordable; `ChainMap::row` exists so a direct DMA-buffer row
    write can replace it without disturbing the mapping.
-8. **Cell format.** 21700 at 70 mm is close to the 98 mm interior. Confirm against the real frame.
+8. **Cell format.** 18650 at 65 mm fits the 98 mm interior with margin. Confirm holder footprint
+   against the real frame, and that a single 80x80 mm board carrying four holders, a 12 A buck and
+   two HUB75 headers still leaves room for the panels' own connectors.

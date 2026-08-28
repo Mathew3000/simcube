@@ -93,9 +93,14 @@ bring-up time:
 - populate 2 boards, one and two panels → the middle
 - populate 1 board, three panels per output → the ambitious one
 
-The cost is the 5 V rail. A board that might drive six panels needs **≥12 A** rather than 8 A
-(60 W APL cap ÷ 5 V, with margin), and the APL cap must be enforced *from boot* — including during
-the white-ish test pattern — or an unlimited board would ask for 24 A. See CUBE-PCB REQ-PWR-1/3.
+The cost is the 5 V rail: a board that might drive six panels needs **≥12 A** rather than 8 A, and
+the APL cap must be enforced *from boot* — including during the bring-up test pattern — or an
+unlimited board would ask for 24 A at full white.
+
+12 A is not padding. An 8 A rail cannot run the measured worst-case scene (kettle, 31 % duty) at
+full brightness — it caps out at brightness 230 — so the limiter would be constraining real content
+rather than guarding against pathological input. At 12 A every real scene runs at 255 untouched.
+Full derivation in [CUBE-PCB.md](CUBE-PCB.md) §4.4; see also REQ-PWR-1/3/4.
 
 ---
 
