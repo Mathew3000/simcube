@@ -118,8 +118,7 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
     float rho = mass_ * k_.poly6(0.0f);  // self
     Vec3 gradI{0.0f, 0.0f, 0.0f};
     float sumGrad2 = 0.0f;
-    forEachNeighbour(v, h, pi, [&](int j) {
-      if (j == i) return;
+    forEachNear(v, h, p, i, [&](int j) {
       const Vec3 rv = pi - p.pred(j);
       const float r2 = length2(rv);
       if (r2 >= k_.h2) return;
@@ -153,8 +152,7 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
     const float w = mass_ / mats[p.mat[i]].restDensityScale;
 
     Vec3 dp{0.0f, 0.0f, 0.0f};
-    forEachNeighbour(v, h, pi, [&](int j) {
-      if (j == i) return;
+    forEachNear(v, h, p, i, [&](int j) {
       const Vec3 rv = pi - p.pred(j);
       const float r2 = length2(rv);
       if (r2 >= k_.h2) return;
@@ -204,6 +202,10 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
     // at the end over-corrects by roughly the neighbour count (~25x) and blows up; averaging
     // them instead mostly cancels, because neighbours slide in opposing directions, and the
     // pile then spreads flat. Sequential projection is both stable and effective.
+    // NOT the neighbour cache. This gather is centred on pos(i), not pred(i), and its contact
+    // radius is kRestSpacing rather than the smoothing radius -- a different neighbourhood
+    // entirely, and a smaller one. Water has friction 0 and skips the pass, so the scenes that
+    // set the frame budget pay nothing for this.
     forEachNeighbour(v, h, posI, [&](int j) {
       if (j == i) return;
       const Vec3 pi = p.pred(i);  // re-read: earlier contacts have already moved it
@@ -275,6 +277,10 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
     if (c <= 0.0f) continue;
     const Vec3 pi = p.pos(i), vi = p.vel(i);
     Vec3 dv{0.0f, 0.0f, 0.0f};
+    // Also not the cache, and for a sharper reason than the friction pass: by the time viscosity
+    // runs, pos has been overwritten with the CORRECTED predicted position, so the cached list --
+    // built before any correction -- is a step out of date here in a way it never is inside the
+    // iteration loop. One scan of five is not worth spending that.
     forEachNeighbour(v, h, pi, [&](int j) {
       if (j == i) return;
       dv += (p.vel(j) - vi) * k_.poly6(length2(p.pos(j) - pi));

@@ -251,7 +251,9 @@ int main(int argc, char** argv) {
   dumpGeometry("cube 32", Geometry::cube(32, 1.0f), kSlabDepth);
   dumpGeometry("single panel 32x32 (thin slab)", Geometry::slab(32, 32, 1.0f), kSlabDepth);
 
-  const int count = (argc > 1) ? atoi(argv[1]) : 3000;
+  // Default is a FILL LEVEL at the reference spacing, not a literal count -- 3000 particles is a
+  // waterline at spacing 1.5 and a rho of 5.8 at spacing 3.0, which benchmarks an explosion.
+  const int count = (argc > 1) ? atoi(argv[1]) : particlesForFill(3000);
   const int steps = (argc > 2) ? atoi(argv[2]) : 600;
   if (argc > 3 && argv[3][0] == 's') {
     // sweep mode: bench N STEPS sweep

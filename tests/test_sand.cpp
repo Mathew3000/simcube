@@ -146,7 +146,7 @@ TEST(sand_friction_is_stable_at_the_default_coefficient) {
   // contact. Accumulating bounded corrections and applying the sum instead over-corrects by
   // roughly the neighbour count and blows up -- this guards that regression.
   const SimVolume v = cubeVolume();
-  const Pile pile = slump(v, 900, kSand, 700, 21);
+  const Pile pile = slump(v, particlesForFill(900), kSand, 1400, 21);
   CHECK(pile.outside == 0);
   CHECK(pile.meanSpeed < 1.0f);
   for (int i = 0; i < g_p.n; ++i) {

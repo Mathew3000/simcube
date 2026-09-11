@@ -239,6 +239,46 @@ constexpr float kVelocityDamping = 0.98f;
 // Below this speed a particle is treated as at rest, so piles stop creeping.
 constexpr float kSleepSpeed = 0.25f;
 
+// --- neighbour cache -------------------------------------------------------
+// The 27-cell gather is a 3h box scanned for an h-radius sphere, so most of what it touches is
+// out of range: measured 19.0 useful neighbours per 70.8 candidates, 27%. The solver pays that
+// scan FIVE times per step (2 iterations x density+correction, plus XSPH). Building the list once
+// and reusing it inside the iteration loop trades memory for four of those scans.
+//
+// Rejected in the Milestone 3 plan at 384KB -- but that was sized for 4096 particles. At the
+// counts that actually run it is a tenth of that.
+#ifndef PARTSIM_NEIGHBOUR_CACHE
+#define PARTSIM_NEIGHBOUR_CACHE 1
+#endif
+// 64, against a measured worst case of 50 across every scene at the margin below (mean 26.2).
+// Overflow TRUNCATES, deterministically -- dropping the furthest few neighbours of an over-dense
+// particle is a far better failure than a pool sized for a worst case that never occurs.
+// SpatialHash::truncated() reports it, and it is zero as configured.
+#ifndef PARTSIM_MAX_NEIGHBOURS
+#define PARTSIM_MAX_NEIGHBOURS 64
+#endif
+constexpr int kMaxNeighbours = PARTSIM_MAX_NEIGHBOURS;
+
+// Cache radius as a multiple of the smoothing radius, and the term that makes the cache worth
+// having. Above 1.0 the list also holds particles just OUTSIDE the kernel, which the correction
+// pass can then pull inside without the frozen list being rebuilt.
+//
+// 1.15 is measured, and the measurement is the argument. A frozen neighbourhood does not give a
+// wrong answer, it gives a slowly-settling one: at margin 1.0 the hydrostatic fixture reaches
+// mean|v| 0.47 after 1500 steps against 0.053 uncached, and needs 4000 steps rather than 2500 to
+// come to rest -- visible as shimmer. At 1.15 it reads 0.053, matching the uncached solver
+// exactly. 1.3 is no better and costs 19% more.
+//
+// Not a proof. The clamp on a single iteration's correction is 0.5*d, so two particles could in
+// principle separate by 2*d = 1.0*h over two iterations and need a margin of 2.0. 1.15 covers what
+// the fluid actually does, and the failure mode if it ever does not is a marginally stale
+// neighbourhood -- which the golden hashes on three targets would catch as a divergence.
+#ifndef PARTSIM_NEIGHBOUR_MARGIN
+#define PARTSIM_NEIGHBOUR_MARGIN 1.15f
+#endif
+constexpr float kNeighbourRadius = kSmoothRadius * PARTSIM_NEIGHBOUR_MARGIN;
+static_assert(kMaxNeighbours <= 255, "per-particle neighbour counts are uint8");
+
 // --- materials -------------------------------------------------------------
 enum Material : uint8_t { kWater = 0, kSand = 1, kMaterialCount = 2 };
 

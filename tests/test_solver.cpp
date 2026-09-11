@@ -277,3 +277,44 @@ TEST(solver_empty_and_single_particle_are_safe) {
   CHECK(g_p.y[0] < -14.0f);
   CHECK(v.box().contains(g_p.pos(0)));
 }
+
+#if PARTSIM_NEIGHBOUR_CACHE
+TEST(neighbour_cache_agrees_with_a_live_gather) {
+  // The cache must contain exactly what a scan would find, in the same order -- that ordering is
+  // what the cross-target determinism rests on, so "same set" is not good enough.
+  const SimVolume v = settleToDepth(2.0f * kSmoothRadius, 200, Vec3{0.0f, -kGravityMag, 0.0f});
+  g_h.build(v, g_p, g_scratch);
+
+  const float r2Max = kNeighbourRadius * kNeighbourRadius;
+  long long listed = 0;
+  int checked = 0;
+  for (int i = 0; i < g_p.n; ++i) {
+    const Vec3 pi = g_p.pred(i);
+    int k = 0;
+    bool ok = true;
+    forEachNeighbour(v, g_h, pi, [&](int j) {
+      if (j == i) return;
+      if (length2(g_p.pred(j) - pi) >= r2Max) return;
+      if (k >= g_h.neighbourCount(i)) { ok = false; return; }
+      if ((int)g_h.neighbours(i)[k] != j) ok = false;
+      ++k;
+    });
+    CHECK(ok);
+    CHECK(k == g_h.neighbourCount(i));
+    listed += g_h.neighbourCount(i);
+    ++checked;
+  }
+  // No particle may have lost neighbours to the cap, or the lists above would not have matched.
+  CHECK(g_h.truncated() == 0);
+  std::printf("       %d particles, mean %.1f cached neighbours, cap %d, truncated %d\n", checked,
+              (double)listed / checked, kMaxNeighbours, g_h.truncated());
+}
+
+TEST(neighbour_cache_margin_covers_what_the_kernel_needs) {
+  // The margin exists so the frozen list still holds every particle the correction pass can pull
+  // inside the smoothing radius. If it ever drops below 1.0 the cache is missing neighbours that
+  // are in range at build time, which is a silently wrong density rather than a slow one.
+  CHECK(kNeighbourRadius >= kSmoothRadius);
+  CHECK(kMaxNeighbours <= 255);
+}
+#endif
