@@ -168,7 +168,14 @@ constexpr float pitchFor(int res) { return kWorldSize / (float)res; }
 constexpr float kPitch = kWorldSize / (float)kPanelRes;
 
 // --- solver ----------------------------------------------------------------
-constexpr float kRestSpacing = 1.5f;                  // d: particle rest separation
+// d: particle rest separation. Overridable because it is the single strongest lever on cost:
+// filling a given volume needs particles proportional to 1/d^3, so coarsening from 1.5 to 3.0 cuts
+// the count for the same waterline by EIGHT. Everything below scales off it, so changing it moves
+// the golden hashes -- the default stays 1.5.
+#ifndef PARTSIM_REST_SPACING
+#define PARTSIM_REST_SPACING 1.5f
+#endif
+constexpr float kRestSpacing = PARTSIM_REST_SPACING;
 constexpr float kSmoothRadius = 2.0f * kRestSpacing;  // h: SPH kernel support (3.0)
 constexpr float kCellSize = kSmoothRadius;            // sort cell; MUST be >= h
 
@@ -225,7 +232,20 @@ constexpr float kHeatInfluence = 24.0f;
 //
 // 2.5 is exactly the old texel-space value (a footprint of 2 plus the half-texel to the kernel's
 // zero crossing), so at pitch 1.0 this reproduces the previous behaviour bit-for-bit.
-constexpr float kSplatRadiusWorld = 2.5f;
+// Expressed as a MULTIPLE of the rest spacing, not an absolute size. A blob has to be wider than
+// the gap between particles or the fluid reads as separate dots -- 2.5 against a spacing of 1.5 is
+// 1.67x, and that ratio is what makes the surface look continuous. Left absolute, coarsening the
+// particles would silently break the look while every constant still "looked right".
+// As an exact fraction, multiply-then-divide: 1.5 * 5 / 3 is exactly 2.5 in float, whereas
+// 1.6667f * 1.5f is 2.50005 and quietly moved the golden PIXEL hash the first time I wrote it.
+#ifndef PARTSIM_SPLAT_RADIUS_NUM
+#define PARTSIM_SPLAT_RADIUS_NUM 5.0f
+#endif
+#ifndef PARTSIM_SPLAT_RADIUS_DEN
+#define PARTSIM_SPLAT_RADIUS_DEN 3.0f
+#endif
+constexpr float kSplatRadiusWorld =
+    kRestSpacing * PARTSIM_SPLAT_RADIUS_NUM / PARTSIM_SPLAT_RADIUS_DEN;
 constexpr int kAttenLutSize = 64;
 // Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
 // water texel peaks around 6500 at these kernel constants, and setting this too low clips
