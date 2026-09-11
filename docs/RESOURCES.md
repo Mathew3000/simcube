@@ -283,48 +283,78 @@ also shared with instruction-cache fills, so it is not a private budget.
 
 ---
 
-## 5.1 Why no timing number comes out of QEMU — and one that does not need it
+## 5.1 What QEMU's timing numbers were worth — settled on hardware
 
 Milestone 3.5 runs the firmware under Espressif's QEMU fork and it reproduces the device
-determinism hash. It says **nothing** about speed, and the reason is worth recording because the
-firmware used to print a figure that looked like a measurement.
+determinism hash. This section used to say its timing output was worthless. **Hardware says
+otherwise, and the estimate this document trusted instead was the thing that was wrong.**
 
-QEMU drives guest timers from **host wall-clock**, so `millis()` inside the guest reports how long
-the emulator took on whatever machine ran it. Measured on one laptop:
+QEMU drives guest timers from **host wall-clock** by default, so `millis()` inside the guest
+reports how long the emulator took on whatever machine ran it. That much stands. `-icount shift=2`
+replaces that with virtual time advancing by instruction count (4 ns/instruction, i.e. 250 MHz at
+1 IPC), which is at least repeatable across machines.
 
-| | ms/step at 1280 particles | what it actually measures |
-|---|---|---|
-| native host (M-series) | 1.92 | the wrong ISA |
-| QEMU, default | 83.50 | that laptop's TCG throughput |
-| QEMU, `-icount shift=2` | 199.63 | host-independent, but see below |
-| bottom-up estimate, 5500 cyc | 29.30 | 240 MHz at 1 IPC |
+Measured at 1280 particles, one solver step, against a real ESP32-S3 devkit at 240 MHz:
 
-`-icount shift=2` makes virtual time advance by instruction count (4 ns/instruction ≈ 250 MHz at
-1 IPC) rather than host speed, which at least makes the number repeatable across machines. But it
-implies **38 990 instructions per particle per step**, against a bottom-up count of ~5 280 (33
-neighbours × 2 solver iterations × 2 passes × ~40 instructions). **That 7.4× gap is unexplained**,
-so the icount figure is not trustworthy either and the firmware now suppresses timing output under
-`PARTSIM_QEMU` instead of printing it.
+| | ms/step | error vs hardware | what it measures |
+|---|---|---|---|
+| **hardware, S3 devkit** | **276.59** | — | the answer |
+| QEMU, `-icount shift=2` | 199.63 | **-28%** | instructions retired, at an assumed 1 IPC |
+| bottom-up estimate, 5500 cyc | 29.30 | **-89% (9.4x out)** | an assumption about neighbour count |
+| QEMU, default | 83.50 | meaningless | that laptop's TCG throughput |
+| native host (M-series) | 1.92 | meaningless | the wrong ISA |
 
-### The arithmetic problem that does not need an emulator
+The 7.4x gap this section previously called "unexplained" was never QEMU's. Hardware needs
+**~51 900 cycles per particle per step** (276.59 ms x 240 MHz / 1280), against the bottom-up count
+of ~5 280. icount's 38 990 instructions per particle per step and hardware's 51 900 cycles imply
+**~1.33 cycles per instruction**, which is an ordinary figure for Xtensa once load stalls are
+counted. icount was right about the work; the 1 IPC assumption is where its 28% went.
+
+The bottom-up estimate was wrong because it assumed ~33 neighbours. Hardware instrumentation
+measured **88.3 candidates gathered per particle for 23.1 useful ones** -- the 27-cell gather scans
+a box, and 74% of what it touches is outside the smoothing radius.
+
+**So: icount is usable for relative work, within roughly 30%.** It is good enough to tell whether
+an optimisation helped before a board is attached, and not good enough to quote as a frame rate.
+The firmware still suppresses timing output under `PARTSIM_QEMU`, because a printed number gets
+quoted without its error bar -- run the `x` benchmark on hardware for anything that matters.
+
+### The arithmetic problem that did not need an emulator -- and its answer
 
 `kFixedDt` is 1/60 and the firmware calls `advance(1/30)`, so it runs **two physics steps per
-displayed frame**. Against the plan's own 5500 cycles/particle/step figure:
+displayed frame**. This document predicted from that alone that the plan's "~1300 particles at
+30 fps" had assumed one step per frame, and that the pool should be roughly halved.
+
+It was right about the mistake and far too generous about the size of it. Measured:
 
 ```
-1280 particles x 5500 cycles  = 29.3 ms/step at 240 MHz
-x 2 substeps                  = 58.7 ms/frame  ->  17 fps, not 30
-particles that fit 33.3 ms    = 726
+  count    sim/step   splat   resolve    blit    frame    fps
+    320      23.77     3.66     2.13    10.09    61.30   16.3
+    640      85.86     7.08     2.20    10.16   188.95    5.3
+    960     168.52    10.70     2.29    10.26   358.00    2.8
+   1280     276.59    14.27     2.32    10.29   577.74    1.7
 ```
 
-So the "~1300 particles at 30 fps" figure looks like it assumed **one** step per frame. If that is
-right the pool should be roughly halved — and the estimate is optimistic in the other direction
-too: native measures ~6000 cycles/particle/step on a ~4 GHz core, and Xtensa should need *more*
-cycles than an M-series core for the same scalar float work, not fewer.
+At 1280 the solver is **95.8% of the frame** (2 x 276.59 of 577.74 ms). Splat is 2.5%, blit 1.8%.
+Cost scales as **n^1.77**, not linearly, because the gather widens as density rises. **About 211
+particles fit 30 fps** as configured -- not 1300, and not the 726 predicted here.
 
-None of this is a device measurement, so it is not a conclusion. It is a reason to expect the
-overrun counter (`r`) to fire on the first boot with real panels, and to treat 1280 as unproven
-rather than as a budget.
+Two consequences worth recording, because they invalidate earlier reasoning elsewhere in this
+document and in the M3 plan:
+
+1. **The master/display split moves 4% of the work.** Its performance rationale is gone. The
+   memory rationale (section 4.1) and the 64x64 blit rationale survive intact -- 41 ms for six
+   faces on one board against 10.3 ms for two -- and those are sufficient on their own.
+2. **Neighbour caching was rejected in the M3 plan at 384 KB.** That figure was for 4096
+   particles. At the counts that actually run it is ~25 KB, and with 74% of the gather wasted it
+   is the largest single lever available. The rejection was made for a particle count now known
+   to be impossible and needs re-deciding on its own merits.
+
+The visual problem this exposes is not frame rate. At 640 particles the waterline renders as a
+**2-texel line**; the design wants a body of water. The lever is particle *size*, not count:
+filling a volume needs particles proportional to 1/d^3, so coarsening `kRestSpacing` from 1.5 to
+3.0 cuts the count for the same waterline by **eight** (2427 -> 303). `kSplatRadiusWorld` must
+follow it -- left absolute, coarser particles stop overlapping and the fluid reads as dots.
 
 ## 6. What has to be measured before the topology is settled
 
@@ -335,8 +365,10 @@ rather than as a budget.
 3. **Achieved refresh** at 128×64 and 384×64, 6-bit. The 141 Hz measured on a 192×32 chain will
    not survive 4× the pixels.
 4. **Panel power** [A] — 20 W/panel drives the pack, the converter and the runtime requirement.
-5. **The real particle budget.** See §5.1: the 1280 figure may assume one physics step per frame
-   when the firmware runs two, and the underlying cycles-per-particle estimate looks optimistic.
-   The overrun counter reports it directly.
+5. ~~**The real particle budget.**~~ **MEASURED — see §5.1.** ~211 particles at 30 fps, not 1280.
+   The solver is 95.8% of the frame and scales n^1.77. What remains open is not the budget but the
+   three levers against it: coarser particles (`kRestSpacing`), neighbour caching (~25 KB at these
+   counts), and one solver substep instead of two. Each moves the golden hash, so measure them one
+   at a time.
 6. **Whether the master's 117 KB spare survives ESP-NOW.** ~55 KB is an estimate, and it is the
    headroom the radio was justified against.
