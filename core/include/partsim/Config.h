@@ -215,10 +215,53 @@ constexpr float kCellSize = kSmoothRadius;            // sort cell; MUST be >= h
 // 4.5). Irrelevant for a closed cube, whose quads already span the box.
 constexpr float kSlabDepth = 3.0f * kRestSpacing;
 
-constexpr float kFixedDt = 1.0f / 60.0f;
+// The physics rate. The firmware displays at 30 Hz, so 1/60 means two solver steps per displayed
+// frame and 1/30 means one -- and the solver is 95.8% of the frame, so this halves the cost
+// outright. What it trades is incompressibility, which is a look-and-feel judgement, not a number.
+//
+// The CFL headroom is unchanged by the move, which is the non-obvious part: the cap is 0.4*h/dt,
+// and coarsening the particles doubled h at the same time as this halves the rate. 1/60 at h=3.0
+// and 1/30 at h=6.0 are both a cap of 72 units/s, against sqrt(2*g*32) = 59 for a full-height
+// fall. This is not a coincidence to rely on -- change kRestSpacing without re-checking it and the
+// fluid starts tunnelling through its own neighbours.
+//
+// STAYS AT 60, and the attempt to halve it is worth recording because the cost was not where the
+// numbers said it would be. Measured at equal simulated time:
+//
+//   dt     iters   ms per simulated second   rho     settled column   SAND HEAP
+//   1/60     2            16.32             1.0231       22.63          5.65
+//   1/60     1            14.22             1.0362       21.86          0.00
+//   1/30     2             7.86             1.0581       20.88          0.01
+//   1/30     3             9.51             1.0446       21.54            -
+//   1/30     2 (eps .02)   8.10             1.0422       21.73          0.00
+//
+// On water alone, 30 Hz is 2.08x for an invisible cost: rendered at equal simulated time the
+// waterline sits at the same height and the lit fraction moves 43.9% -> 42.4%. The compression it
+// adds can be partly bought back by retuning kCfmEpsilon 0.05 -> 0.02 (0.01 is unstable), and
+// more iterations do NOT buy it back -- even four leaves rho at 1.036, so it is the timestep, not
+// an iteration shortage.
+//
+// What kills it is SAND. Granular friction is a position-based projection bounded by mu * contact
+// overlap, and that bound is a position quantity while the sliding it resists grows with dt. At
+// 60 Hz the heap holds at 5.65 while water spreads flat at 0.00 -- the defining difference between
+// the two materials. At 30 Hz the heap collapses to 0.00 and sand becomes indistinguishable from
+// water. Scaling the Coulomb bound by the timestep ratio does not recover it (measured 0.03).
+//
+// Dropping to one iteration at 60 Hz collapses the heap the same way, for only 1.11x -- so it is
+// the worse deal on both axes and is not the fallback the plan assumed it was.
+//
+// The lever is real for a liquid-only build and the macro is left here so that build is one flag
+// away. It is not a default while sand ships.
+#ifndef PARTSIM_FIXED_DT_DEN
+#define PARTSIM_FIXED_DT_DEN 60.0f
+#endif
+constexpr float kFixedDt = 1.0f / PARTSIM_FIXED_DT_DEN;
 // 2 beats 3 measurably: it settles faster (mean speed 0.03 vs 0.30 after 500 steps at
 // 3000 particles) and costs 28% less. More iterations are not better here.
-constexpr int kSolverIterations = 2;
+#ifndef PARTSIM_SOLVER_ITERATIONS
+#define PARTSIM_SOLVER_ITERATIONS 2
+#endif
+constexpr int kSolverIterations = PARTSIM_SOLVER_ITERATIONS;
 constexpr int kMaxSubsteps = 3;
 
 // Gravity is tuned for stability at 60Hz rather than physical scale: falling the full
@@ -227,7 +270,10 @@ constexpr int kMaxSubsteps = 3;
 constexpr float kGravityMag = 55.0f;
 // Relaxation in the lambda denominator. Sized against the actual sum-of-squared-gradients,
 // which is ~0.7 for a saturated neighbourhood at these kernel constants.
-constexpr float kCfmEpsilon = 0.05f;
+#ifndef PARTSIM_CFM_EPSILON
+#define PARTSIM_CFM_EPSILON 0.05f
+#endif
+constexpr float kCfmEpsilon = PARTSIM_CFM_EPSILON;
 constexpr float kSCorrK = 5.0e-3f;           // Macklin artificial pressure
 constexpr int kSCorrN = 4;
 constexpr float kMaxDeltaP = 0.5f * kRestSpacing;  // per-iteration correction clamp

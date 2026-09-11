@@ -366,9 +366,20 @@ follow it -- left absolute, coarser particles stop overlapping and the fluid rea
    not survive 4× the pixels.
 4. **Panel power** [A] — 20 W/panel drives the pack, the converter and the runtime requirement.
 5. ~~**The real particle budget.**~~ **MEASURED — see §5.1.** ~211 particles at 30 fps, not 1280.
-   The solver is 95.8% of the frame and scales n^1.77. What remains open is not the budget but the
-   three levers against it: coarser particles (`kRestSpacing`), neighbour caching (~25 KB at these
-   counts), and one solver substep instead of two. Each moves the golden hash, so measure them one
-   at a time.
+   The solver is 95.8% of the frame and scales n^1.77. Three levers were tried against it:
+
+   | lever | result | host cost |
+   |---|---|---|
+   | `kRestSpacing` 1.5 → 3.0 | **landed** — same waterline, 8x fewer particles | — |
+   | neighbour cache, margin 1.15 | **landed** — 354 → 176 candidate visits/step | +64.5 KB |
+   | 30 Hz physics | **rejected** — collapses the sand heap, 5.65 → 0.00 | — |
+   | one solver iteration | **rejected** — same collapse, only 1.11x | — |
+
+   The first two are on the device's critical path and their real speedup is **unmeasured**: host
+   sees 1.13x from the cache, but the S3 is memory-bound on the 27-cell gather where an M-series
+   core is not, and the candidate-visit count halves. That is the next `x` run on hardware.
+
+   The rejected pair are rejected **for a build that ships sand**. Beaker mode is liquid-only, so
+   `PARTSIM_FIXED_DT_DEN=30` is worth 2.08x there and is left one flag away.
 6. **Whether the master's 117 KB spare survives ESP-NOW.** ~55 KB is an estimate, and it is the
    headroom the radio was justified against.
