@@ -706,7 +706,13 @@ void setup() {
 
 #if PARTSIM_MULTINODE
   g_role = readRole(pins::kRoleA, pins::kRoleB);
-  Serial.printf("role: %s\n", roleName(g_role));
+  Serial.printf("role: %s  (straps IO%d/IO%d)\n", roleName(g_role), pins::kRoleA, pins::kRoleB);
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+  if (digitalRead(pins::kRoleA) && digitalRead(pins::kRoleB)) {
+    Serial.println(F("  straps are open -- defaulted to display0. Jumper IO38 and/or IO39 to GND"));
+    Serial.println(F("  to select display1 (IO38=GND) or display2 (IO39=GND)."));
+  }
+#endif
 #endif
 
   const int mode = (kFaces == 1) ? Simulation::kSinglePanel : Simulation::kCube;
