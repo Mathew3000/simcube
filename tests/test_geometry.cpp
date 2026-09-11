@@ -131,22 +131,39 @@ TEST(volume_slab_bounds_get_depth_from_the_inward_push) {
   CHECK_NEAR(b.size().z, kSlabDepth, 1e-4);  // zero-thickness quad + inward push
 }
 
+namespace {
+// ceil(extent / kCellSize), computed the way SimVolume::build does. Written out rather than
+// hardcoded because kCellSize is 2*kRestSpacing, so every one of these numbers moves whenever the
+// particles are coarsened -- and a hardcoded dimension then reads as a geometry regression.
+int cellsAcross(float extent) {
+  const int n = (int)(extent / kCellSize);
+  return (extent / kCellSize > (float)n) ? n + 1 : n;
+}
+}  // namespace
+
 TEST(volume_grid_dims_for_cube) {
   SimVolume v;
   CHECK(v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize));
-  CHECK(v.dim().x == 11);  // ceil(32 / 3)
-  CHECK(v.dim().y == 11);
-  CHECK(v.dim().z == 11);
-  CHECK(v.cellCount() == 11 * 11 * 11);
+  const int side = cellsAcross(kWorldSize);
+  CHECK(v.dim().x == side);
+  CHECK(v.dim().y == side);
+  CHECK(v.dim().z == side);
+  CHECK(v.cellCount() == side * side * side);
+  std::printf("       cube grid %d^3 at cell %.1f\n", side, (double)kCellSize);
 }
 
 TEST(volume_grid_dims_for_slab) {
   SimVolume v;
   CHECK(v.build(Geometry::slab(32, 32, 1.0f), kSlabDepth, kCellSize));
-  CHECK(v.dim().x == 11);
-  CHECK(v.dim().y == 11);
-  CHECK(v.dim().z == 2);  // 4.5 units of depth spans two 3-unit cells
-  CHECK(v.cellCount() == 11 * 11 * 2);
+  const int side = cellsAcross(kWorldSize);
+  // kSlabDepth is 3*kRestSpacing and kCellSize is 2*kRestSpacing, so the depth always spans
+  // exactly two cells whatever the spacing. That ratio is the assertion worth making.
+  const int depth = cellsAcross(kSlabDepth);
+  CHECK(v.dim().x == side);
+  CHECK(v.dim().y == side);
+  CHECK(depth == 2);
+  CHECK(v.dim().z == depth);
+  CHECK(v.cellCount() == side * side * depth);
 }
 
 TEST(volume_rejects_cell_smaller_than_smoothing_radius) {

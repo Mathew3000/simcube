@@ -211,15 +211,22 @@ TEST(renderer_resolve_rgb_and_rgba_agree) {
 TEST(renderer_exposure_controls_brightness_without_clipping_to_white) {
   const Geometry g = Geometry::cube(32, 1.0f);
   g_p.clear();
-  for (int i = 0; i < 400; ++i)
-    g_p.add(Vec3{-14.0f + (float)(i % 20) * 1.3f, -15.0f, -14.0f + (float)(i / 20) * 1.3f},
-            Vec3{0, 0, 0}, kWater);
+  // A single sheet of fluid on the floor, laid out at the REST spacing. The literal 1.3 this used
+  // was a shade under the old spacing of 1.5; kept absolute it becomes 0.43x the spacing, a sheet
+  // five times denser than any real fluid, and both exposures then clip to white and the test
+  // measures nothing.
+  const float sp = kRestSpacing;
+  const int side = imax(4, (int)(26.0f / sp));
+  for (int iz = 0; iz < side; ++iz)
+    for (int ix = 0; ix < side; ++ix)
+      g_p.add(Vec3{-14.0f + (float)ix * sp, -15.0f, -14.0f + (float)iz * sp}, Vec3{0, 0, 0},
+              kWater);
 
   // Lower exposure == brighter. A too-low value clips the whole ramp to near-white, which is
   // exactly the failure the first render of this project hit.
   double lumBright = 0.0, lumDim = 0.0;
   for (int pass = 0; pass < 2; ++pass) {
-    g_r.setExposure(pass == 0 ? 600.0f : 6000.0f);
+    g_r.setExposure(pass == 0 ? kSplatExposure / 12.0f : kSplatExposure * 0.85f);
     g_r.init(g);
     g_r.render(g_p, g_noFire, g);
     const uint8_t* px = g_r.panelPixels(4);
@@ -228,6 +235,9 @@ TEST(renderer_exposure_controls_brightness_without_clipping_to_white) {
       sum += 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
     if (pass == 0) lumBright = sum / (32 * 32); else lumDim = sum / (32 * 32);
   }
+  std::printf("       exposure %.0f -> lum %.1f,  exposure %.0f -> lum %.1f\n",
+              (double)(kSplatExposure / 12.0f), lumBright, (double)(kSplatExposure * 0.85f),
+              lumDim);
   CHECK(lumBright > lumDim * 1.5);
   g_r.setExposure(kSplatExposure);
 }
@@ -326,10 +336,13 @@ TEST(renderer_footprint_tracks_the_panel_pitch) {
   const Blob coarse = blobFor(32, 1.0f, 2.0f);
   const Blob fine = blobFor(64, 0.5f, 2.0f);
 
-  // The old hardcoded value, preserved exactly at pitch 1.0 so the golden hashes did not move.
-  CHECK(coarse.footprint == 2);
+  // The invariant is the RELATIONSHIP, not either number: the footprint is the world blob radius
+  // measured in texels, so it tracks both kSplatRadiusWorld and the pitch. Hardcoding 2 and 5
+  // pinned it to one particular rest spacing, and coarsening the particles then read as a
+  // renderer regression.
+  CHECK(coarse.footprint == (int)(kSplatRadiusWorld / 1.0f));
   // Half the pitch, so twice the texel radius.
-  CHECK(fine.footprint == 5);
+  CHECK(fine.footprint == 2 * coarse.footprint);
   std::printf("       footprint %d texels at pitch 1.0, %d at pitch 0.5\n", coarse.footprint,
               fine.footprint);
 }
@@ -519,8 +532,15 @@ TEST(renderer_helpers_see_the_whole_face_at_either_resolution) {
 
     const Peak pk = findPeak(g_r, 0, kChWater);
     std::printf("       res %d: peak at (%d,%d), expected (%d,%d)\n", res, pk.i, pk.j, far, far);
-    CHECK(pk.i == far);
-    CHECK(pk.j == far);
+    // Within one texel, not exactly on it. The kernel LUT is indexed by squared distance scaled
+    // to the blob radius, so a wide blob quantises its own centre into a PLATEAU of equal values
+    // -- at pitch 0.5 the radius is 12 texels and the innermost ring is indistinguishable from the
+    // centre. findPeak then returns whichever plateau texel it scanned first. The property under
+    // test is that the helpers address the whole face, which a peak beyond column 32 establishes;
+    // sub-texel placement of a 12-texel blob is not something this test can or should assert.
+    CHECK(pk.i >= far - 1 && pk.i <= far + 1);
+    CHECK(pk.j >= far - 1 && pk.j <= far + 1);
+    CHECK(pk.i > res / 2 && pk.j > res / 2);  // genuinely in the far quadrant
     CHECK(pk.value > 0);
   }
 }

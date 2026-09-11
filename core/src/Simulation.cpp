@@ -12,7 +12,12 @@ constexpr float kJerkDecay = 0.85f;
 constexpr float kFadeSeconds = 1.6f;
 // Particles added or removed per physics step. At 60Hz this drains 3000 particles in about a
 // second and a half, which reads as the tank emptying rather than as a glitch.
-constexpr int kPopulationRate = 32;
+// Particles added or removed per step during a scene transition. Scaled by the rest spacing,
+// because what the design fixes is the DURATION of the drain, not the rate: 32/step empties a
+// 3000-particle tank over 94 steps (1.6 s), and left at 32 it empties the same tank at spacing 3.0
+// -- now 375 particles -- in 12 steps, which reads as the hard reset this gradual path exists to
+// avoid. At least 1, or a transition never completes.
+const int kPopulationRate = imax(1, particlesForFill(32));
 
 }  // namespace
 
@@ -78,8 +83,8 @@ void Simulation::applySceneTargets(int sceneId) {
   // A slab tolerates a far smaller share of its nominal capacity than a cube does; overfilling
   // leaves the fluid permanently over-compressed and it never settles.
   const int ceiling = (geometry_.count() == 1) ? capacity() / 4 : (capacity() * 9) / 10;
-  targetSand_ = imin(sc.sandCount, ceiling);
-  targetWater_ = imin(sc.waterCount, ceiling - targetSand_);
+  targetSand_ = imin(particlesForFill(sc.sandCount), ceiling);
+  targetWater_ = imin(particlesForFill(sc.waterCount), ceiling - targetSand_);
   if (targetWater_ < 0) targetWater_ = 0;
 
   emitterCount_ = imin(sc.emitterCount, kMaxEmitters);

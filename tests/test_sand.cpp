@@ -20,7 +20,10 @@ void blockOnFloor(const SimVolume& v, int count, uint8_t material, uint32_t seed
   Rng r(seed);
   g_p.clear();
   const float sp = kRestSpacing * (material == kSand ? 0.8f : 1.0f);
-  const int side = 9;
+  // A block of a fixed WORLD width, not a fixed number of particles across. Held at 9 the block's
+  // footprint doubles when the particles are coarsened, and the heap it slumps into is then being
+  // compared across two different geometries.
+  const int side = imax(2, (int)(13.5f / sp + 0.5f));
   const float lo = v.box().lo.y;
   for (int gy = 0; gy < 40 && g_p.n < count; ++gy)
     for (int gz = 0; gz < side && g_p.n < count; ++gz)
@@ -67,8 +70,8 @@ TEST(sand_holds_a_heap_where_water_spreads_flat) {
   // The defining difference between a granular material and a heavy liquid. Same count, same
   // gentle deposition, same gravity -- only the material parameters differ.
   const SimVolume v = cubeVolume();
-  const Pile water = slump(v, 600, kWater, 900, 3);
-  const Pile sand = slump(v, 600, kSand, 900, 3);
+  const Pile water = slump(v, particlesForFill(600), kWater, 900, 3);
+  const Pile sand = slump(v, particlesForFill(600), kSand, 900, 3);
 
   std::printf("       water peak %.2f (|v| %.3f)   sand peak %.2f (|v| %.3f)\n",
               water.peak, water.meanSpeed, sand.peak, sand.meanSpeed);
@@ -83,7 +86,7 @@ TEST(sand_comes_to_rest_and_does_not_creep) {
   // Without the static-friction deadband a pile creeps indefinitely and slowly flattens, which
   // reads as the sand melting. So it must actually stop, not merely slow down.
   const SimVolume v = cubeVolume();
-  const Pile settled = slump(v, 600, kSand, 900, 11);
+  const Pile settled = slump(v, particlesForFill(600), kSand, 1800, 11);
   CHECK(settled.meanSpeed < 0.3f);
 
   const float peakBefore = settled.peak;
@@ -105,14 +108,22 @@ TEST(sand_sinks_through_water) {
   const SimVolume v = cubeVolume();
   g_p.clear();
   Rng r(5);
-  for (int i = 0; i < 1800; ++i)
+  // The water has to be a POOL, not a film: sand can only settle underneath if there is enough
+  // depth for "underneath" to exist. Sized to three smoothing radii, so the count follows the rest
+  // spacing -- particlesForFill(1800) alone pools barely one radius deep at spacing 3.0, and the
+  // separation then measures 0.3 units, which is a tenth of a particle diameter and means nothing.
+  const float poolDepth = 3.0f * kSmoothRadius;
+  const int waterN =
+      (int)(v.box().size().x * v.box().size().z * poolDepth /
+            (kRestSpacing * kRestSpacing * kRestSpacing));
+  for (int i = 0; i < waterN; ++i)
     g_p.add(Vec3{r.nextSigned() * 15.0f, -16.0f + r.nextFloat() * 14.0f,
                  r.nextSigned() * 15.0f}, Vec3{0, 0, 0}, kWater);
-  for (int i = 0; i < 400; ++i)
+  for (int i = 0; i < waterN / 4; ++i)
     g_p.add(Vec3{r.nextSigned() * 8.0f, 2.0f + r.nextFloat() * 8.0f, r.nextSigned() * 8.0f},
             Vec3{0, 0, 0}, kSand);
 
-  for (int s = 0; s < 1200; ++s)
+  for (int s = 0; s < 1800; ++s)
     g_solver.step(g_p, v, g_h, g_scratch, defaultMaterials(),
                   Vec3{0.0f, -kGravityMag, 0.0f}, kFixedDt);
 
@@ -125,7 +136,9 @@ TEST(sand_sinks_through_water) {
   const double waterY = wy / wn, sandY = sy / sn;
   std::printf("       water meanY %.2f   sand meanY %.2f\n", waterY, sandY);
   CHECK(outside == 0);
-  CHECK(sandY < waterY - 0.5);  // sand settled underneath
+  // Half a particle diameter of separation, so the threshold means the same thing at any rest
+  // spacing rather than being sub-particle at a coarse one.
+  CHECK(sandY < waterY - 0.5 * kRestSpacing);  // sand settled underneath
 }
 
 TEST(sand_friction_is_stable_at_the_default_coefficient) {

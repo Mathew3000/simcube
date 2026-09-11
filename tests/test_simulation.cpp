@@ -20,8 +20,9 @@ void run(int steps) {
 }  // namespace
 
 TEST(sim_init_cube_and_settle) {
-  CHECK(g_sim.init(Simulation::kCube, 1500, 1));
-  CHECK(g_sim.particleCount() == 1500);
+  const int want = particlesForFill(1500);
+  CHECK(g_sim.init(Simulation::kCube, want, 1));
+  CHECK(g_sim.particleCount() == want);
   CHECK(g_sim.geometry().count() == 6);
   run(300);
 
@@ -46,7 +47,7 @@ TEST(sim_init_caps_at_capacity) {
 }
 
 TEST(sim_orientation_rotates_gravity_into_object_space) {
-  CHECK(g_sim.init(Simulation::kCube, 1200, 3));
+  CHECK(g_sim.init(Simulation::kCube, particlesForFill(1200), 3));
 
   // Identity: gravity is straight down in object space.
   g_sim.setOrientation(Quat{0, 0, 0, 1});
@@ -148,7 +149,7 @@ TEST(sim_golden_sequence_is_reproducible) {
 }
 
 TEST(sim_render_produces_lit_panels) {
-  CHECK(g_sim.init(Simulation::kCube, 2000, 9));
+  CHECK(g_sim.init(Simulation::kCube, particlesForFill(2000), 9));
   run(300);
   g_sim.render();
 
@@ -194,8 +195,8 @@ TEST(sim_render_interpolation_moves_the_splat_not_the_state) {
 TEST(sim_interpolation_is_off_for_a_settled_fluid) {
   // A settled fluid has near-zero velocity, so interpolation must be a no-op there rather than
   // introducing shimmer of its own.
-  CHECK(g_sim.init(Simulation::kCube, 900, 19));
-  run(400);
+  CHECK(g_sim.init(Simulation::kCube, particlesForFill(900), 19));
+  run(900);  // coarse particles shed momentum more slowly; 400 leaves a residual shimmer
 
   g_sim.renderer().setTimeOffset(0.0f);
   g_sim.renderer().render(g_sim.particles(), g_sim.field(), g_sim.geometry());

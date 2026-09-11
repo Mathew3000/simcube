@@ -31,13 +31,45 @@ int fillBottom(Particles& p, const Aabb& box, int want, uint8_t mat, uint32_t se
   return p.n;
 }
 
-// Settles `count` water particles in a 32^3 cube and leaves the state in the globals.
-SimVolume settle(int count, int steps, Vec3 gravity) {
+// Settles water in a 32^3 cube and leaves the state in the globals.
+//
+// `refCount` is a FILL LEVEL expressed at the reference rest spacing, not a literal particle
+// count -- particlesForFill rescales it by 1/d^3. Passing the literal through would make every
+// fixture here a function of kRestSpacing: at spacing 3.0 a 32-unit box holds ~1213 particles at
+// rest, so the 1500 these tests ask for would be an OVERFULL box that cannot settle by
+// construction, and "solver does not reach hydrostatic rest" would look like a physics
+// regression instead of a stale constant.
+SimVolume settle(int refCount, int steps, Vec3 gravity);
+
+// Particles needed to pool a 32^3 box to `depth` world units: the floor area times the depth,
+// divided by the volume one particle occupies at rest. Stated as a DEPTH because that is what the
+// density tests actually need -- bulk density is only meaningful with an interior, and "interior"
+// means further than one smoothing radius from a free surface. kSmoothRadius is 2*kRestSpacing,
+// so a fixture written as a particle count silently stops having an interior when the particles
+// are coarsened: at spacing 3.0 the old settle(1500) pools 4.6 units against an h of 6.0, which is
+// all surface and legitimately reads 0.94 rather than 1.00.
+int countForDepth(const Aabb& box, float depth) {
+  const float d = kRestSpacing;
+  return (int)(box.size().x * box.size().z * depth / (d * d * d));
+}
+
+SimVolume settleToDepth(float depth, int steps, Vec3 gravity) {
   SimVolume v;
   v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize);
   g_solver.init();
   g_p.clear();
-  fillBottom(g_p, v.box(), count, kWater, 0xA11CE);
+  fillBottom(g_p, v.box(), countForDepth(v.box(), depth), kWater, 0xA11CE);
+  for (int s = 0; s < steps; ++s)
+    g_solver.step(g_p, v, g_h, g_scratch, defaultMaterials(), gravity, kFixedDt);
+  return v;
+}
+
+SimVolume settle(int refCount, int steps, Vec3 gravity) {
+  SimVolume v;
+  v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize);
+  g_solver.init();
+  g_p.clear();
+  fillBottom(g_p, v.box(), particlesForFill(refCount), kWater, 0xA11CE);
   for (int s = 0; s < steps; ++s)
     g_solver.step(g_p, v, g_h, g_scratch, defaultMaterials(), gravity, kFixedDt);
   return v;
@@ -72,7 +104,11 @@ TEST(solver_rest_density_normalisation) {
 }
 
 TEST(solver_hydrostatic_rest) {
-  const SimVolume v = settle(1500, 400, Vec3{0.0f, -kGravityMag, 0.0f});
+  // Four smoothing radii deep, so most of the fluid is interior rather than free surface.
+  // 1500 steps, not 400: a pool four smoothing radii deep has far more momentum to shed than the
+  // shallow one this fixture used to build. Measured convergence at spacing 3.0 -- mean|v| 1.09 at
+  // 400 steps, 0.52 at 900, 0.053 at 1500, 0.000 at 2500. It does settle; it is not a limit cycle.
+  const SimVolume v = settleToDepth(4.0f * kSmoothRadius, 1500, Vec3{0.0f, -kGravityMag, 0.0f});
   const Aabb& b = v.box();
 
   int outside = 0, moving = 0, bad = 0;
@@ -109,12 +145,15 @@ TEST(solver_column_density_is_uniform_with_depth) {
   // The bug this guards against: an under-compensated wall term let the fluid over-pack
   // against the floor by 1.5x while the measured density still read 1.0. A uniform
   // profile is the signature of a correct boundary.
-  const SimVolume v = settle(1500, 400, Vec3{0.0f, -kGravityMag, 0.0f});
+  const float depth = 4.0f * kSmoothRadius;
+  const SimVolume v = settleToDepth(depth, 1500, Vec3{0.0f, -kGravityMag, 0.0f});
   const Aabb& b = v.box();
 
-  const float band = 2.0f;
+  // One band per smoothing radius, and only the bands BELOW the top one -- the surface band is
+  // free surface, where a density below rest is correct physics rather than a boundary bug.
+  const float band = kSmoothRadius;
   int bands = 0;
-  for (int k = 0; k < 4; ++k) {
+  for (int k = 0; k < (int)(depth / band) - 1; ++k) {
     const float y0 = b.lo.y + (float)k * band;
     int cnt = 0;
     double rho = 0.0;
@@ -123,8 +162,9 @@ TEST(solver_column_density_is_uniform_with_depth) {
         ++cnt;
         rho += g_solver.densityAt(g_p, v, g_h, i);
       }
-    if (cnt < 50) continue;
+    if (cnt < 20) continue;
     ++bands;
+    std::printf("       band %d: %d particles, rho %.4f\n", k, cnt, rho / cnt);
     CHECK(rho / cnt > 0.95 && rho / cnt < 1.06);
   }
   CHECK(bands >= 3);  // the column really is several bands deep
@@ -146,7 +186,7 @@ TEST(solver_survives_a_violent_shake_without_leaking) {
   v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize);
   g_solver.init();
   g_p.clear();
-  fillBottom(g_p, v.box(), 1500, kWater, 99);
+  fillBottom(g_p, v.box(), particlesForFill(1500), kWater, 99);
 
   // Slam gravity around at full strength in a different direction every 10 steps -- far
   // harsher than a hand shake, and the case where a solver typically vents particles
@@ -183,7 +223,7 @@ TEST(solver_thin_slab_behaves_like_a_2d_tank) {
   // until single-panel mode is actually built -- it is not part of Milestone 1.
   const int want = g_solver.capacity(v) / 4;
   fillBottom(g_p, v.box(), want, kWater, 1234);
-  CHECK(g_p.n > 100);
+  CHECK(g_p.n > 25);  // scales with 1/d^3; the point is that the slab got a real fill
   for (int s = 0; s < 300; ++s)
     g_solver.step(g_p, v, g_h, g_scratch, defaultMaterials(),
                   Vec3{0.0f, -kGravityMag, 0.0f}, kFixedDt);

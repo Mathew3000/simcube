@@ -239,13 +239,13 @@ TEST(scene_transition_drains_and_refills_gradually) {
   // frame reads as a glitch rather than as a change of scene.
   CHECK(g_sim.initScene(Simulation::kCube, 0, 4));  // water tank
   const int start = g_sim.particleCount();
-  CHECK(start > 1000);
+  CHECK(start > particlesForFill(1000));
 
   g_sim.transitionToScene(1);  // campfire: no particles at all
   CHECK(g_sim.transitioning());
   // One step must not empty it.
   g_sim.stepFixed();
-  CHECK(g_sim.particleCount() > start - 200);
+  CHECK(g_sim.particleCount() > start - particlesForFill(200));
   CHECK(g_sim.particleCount() < start);  // but it is draining
 
   // It does get there, over a second or two rather than instantly.
@@ -261,10 +261,10 @@ TEST(scene_transition_drains_and_refills_gradually) {
   g_sim.stepFixed();
   const int afterOne = g_sim.particleCount();
   CHECK(afterOne > 0);
-  CHECK(afterOne < 200);
+  CHECK(afterOne < particlesForFill(200) + 1);
   steps = 0;
   while (g_sim.transitioning() && steps++ < 4000) g_sim.stepFixed();
-  CHECK(g_sim.particleCount() > 1000);
+  CHECK(g_sim.particleCount() > particlesForFill(1000));
 }
 
 TEST(scene_transition_crossfades_the_palette) {

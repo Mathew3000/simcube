@@ -14,20 +14,27 @@
 //   PARTSIM_PROFILE_ESP32_DISPLAY  two 64x64 faces of six       (Milestone 3, three of these)
 
 // --- shared by every device profile ------------------------------------------------------------
-// 1280 particles is a CPU limit, not a memory one. A bottom-up cycle count came to ~5500
-// cycles/particle/step, which at 240MHz and 30 FPS is about 1300 -- so a larger pool would
-// only buy RAM pressure in exchange for particles the processor cannot integrate anyway.
+// A CPU limit, not a memory one -- and MEASURED on hardware, which is the only reason this
+// number is trustworthy. The 1280 that stood here came from a bottom-up estimate of ~5500
+// cycles/particle/step; the device needs ~51900 (docs/RESOURCES.md section 5.1), and ~211
+// particles fit 30 FPS at the old rest spacing. Solver cost scales n^1.77.
 //
-// This is the figure to revisit once the master stops splatting: on a multi-node cube the
-// render cost moves to the display nodes, so the master's step budget grows.
-#define PARTSIM_DEVICE_MAX_PARTICLES 1280
+// 512 is sized against the COARSENED fluid: at kRestSpacing 3.0 the fullest preset (water tank)
+// asks for 375 particles, and applySceneTargets caps a cube at 9/10 of capacity, so 512 leaves
+// room for a preset to grow without another round of budget work. Raising it does not buy
+// particles the processor can integrate.
+#define PARTSIM_DEVICE_MAX_PARTICLES 512
 #define PARTSIM_DEVICE_MAX_PANELS 6
-// 32-unit cube at kCellSize 3.0, plus the grid's padding: 12^3 with room to spare.
-#define PARTSIM_DEVICE_MAX_GRID_CELLS 4096
-// 32-unit cube at kFieldCell 1.5: 22^3 = 10648, and the grid is ping-ponged, so this is the
-// single largest pool after the particles. Do not round it up generously. Note it is derived
-// from the WORLD size, so it does not grow with panel resolution.
-#define PARTSIM_DEVICE_MAX_FIELD_CELLS 10648
+// The sort cell is kSmoothRadius, which is 2*kRestSpacing, so this shrinks as the particles
+// coarsen: a 32-unit cube at kCellSize 6.0 is ceil(32/6) = 6 per axis, 216 cells. 512 covers that
+// with room for a slab's different aspect ratio. Was 4096, sized for kCellSize 3.0.
+#define PARTSIM_DEVICE_MAX_GRID_CELLS 512
+// The heat cell is kSmoothRadius/2 = kRestSpacing (core/src/RenderState.cpp), so this also
+// shrinks with the coarsening: a 32-unit cube at cell 3.0 is ceil(32/3) = 11 per axis, 1331 cells.
+// The grid is ping-ponged, so it is still the largest pool after the particles -- 1728 (12^3) is
+// deliberately tight. Was 10648, sized for a 1.5-unit cell. Derived from the WORLD size, so it
+// does not grow with panel resolution.
+#define PARTSIM_DEVICE_MAX_FIELD_CELLS 1728
 
 #ifdef PARTSIM_PROFILE_ESP32
 
@@ -168,14 +175,37 @@ constexpr float pitchFor(int res) { return kWorldSize / (float)res; }
 constexpr float kPitch = kWorldSize / (float)kPanelRes;
 
 // --- solver ----------------------------------------------------------------
-// d: particle rest separation. Overridable because it is the single strongest lever on cost:
-// filling a given volume needs particles proportional to 1/d^3, so coarsening from 1.5 to 3.0 cuts
-// the count for the same waterline by EIGHT. Everything below scales off it, so changing it moves
-// the golden hashes -- the default stays 1.5.
+// d: particle rest separation, and the single strongest lever on cost. Filling a given volume
+// needs particles proportional to 1/d^3, so this is what buys frames -- coarsening 1.5 -> 3.0 cuts
+// the water tank from 3000 particles to 375 at the SAME waterline (lit fraction 40.0% -> 42.9%).
+//
+// 3.0 is the measured limit, not a round number. At 2.5 the fluid is clean but costs 648
+// particles; at 3.0 the settled lattice becomes visible looking straight down the bottom face,
+// which is why kSplatRadiusWorld went from 5/3 of the spacing to 2x (see below). Past 3.0 the
+// blob needed to hide the lattice softens the waterline more than the coarser fluid saves.
+//
+// Everything downstream derives from this -- kSmoothRadius, kCellSize, kSlabDepth, kMaxDeltaP,
+// kSplatRadiusWorld, kSplatExposure, the friction contact radius, the grid and field cell counts,
+// and the scene fill counts. Changing it moves both golden hashes.
 #ifndef PARTSIM_REST_SPACING
-#define PARTSIM_REST_SPACING 1.5f
+#define PARTSIM_REST_SPACING 3.0f
 #endif
 constexpr float kRestSpacing = PARTSIM_REST_SPACING;
+
+// Scene presets -- and the fixtures in tests/ -- are written as absolute counts against THIS
+// spacing. Such a count describes a FILL LEVEL: "water tank" means a waterline, not the number
+// 3000, and settle(1500) means a 15%-full box. Coarsening the particles has to scale them by
+// 1/d^3 or the intent is lost -- a scene silently becomes a function of the pool size via the
+// clamp in Simulation::applySceneTargets, and a test silently starts measuring an overfull box
+// that cannot settle by construction.
+constexpr float kRefSpacing = 1.5f;
+// Exactly 1.0f at the reference spacing (a value divided by itself), so the default build stays
+// bit-identical and this scaling cannot move a golden hash on its own.
+constexpr float kFillCountScale =
+    (kRefSpacing * kRefSpacing * kRefSpacing) / (kRestSpacing * kRestSpacing * kRestSpacing);
+constexpr int particlesForFill(int refCount) {
+  return (int)((float)refCount * kFillCountScale + 0.5f);
+}
 constexpr float kSmoothRadius = 2.0f * kRestSpacing;  // h: SPH kernel support (3.0)
 constexpr float kCellSize = kSmoothRadius;            // sort cell; MUST be >= h
 
@@ -238,8 +268,13 @@ constexpr float kHeatInfluence = 24.0f;
 // particles would silently break the look while every constant still "looked right".
 // As an exact fraction, multiply-then-divide: 1.5 * 5 / 3 is exactly 2.5 in float, whereas
 // 1.6667f * 1.5f is 2.50005 and quietly moved the golden PIXEL hash the first time I wrote it.
+//
+// 2x (6/3) rather than the 5/3 that reproduced the old absolute 2.5. At kRestSpacing 3.0, 5/3
+// leaves the settled crystal lattice plainly visible through the bottom face; 2x hides it with the
+// waterline still crisp, and 7/3 hides it while visibly softening the waterline. Costs a footprint
+// of 6 texels instead of 5 at pitch 1.0 -- 169 scanned texels per particle per face against 121.
 #ifndef PARTSIM_SPLAT_RADIUS_NUM
-#define PARTSIM_SPLAT_RADIUS_NUM 5.0f
+#define PARTSIM_SPLAT_RADIUS_NUM 6.0f
 #endif
 #ifndef PARTSIM_SPLAT_RADIUS_DEN
 #define PARTSIM_SPLAT_RADIUS_DEN 3.0f
@@ -250,7 +285,25 @@ constexpr int kAttenLutSize = 64;
 // Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
 // water texel peaks around 6500 at these kernel constants, and setting this too low clips
 // everything to white and throws the whole ramp away.
-constexpr float kSplatExposure = 7200.0f;
+//
+// DERIVED from the blob radius and the rest spacing, not tuned independently. A texel's
+// accumulation is the sum over the particles inside the projected splat column, which holds
+// pi*R^2 * kSplatInfluence * density particles at a density of 1/d^3 -- so accumulation goes as
+// R^2/d^3. Hold 7200 fixed and coarsening from 1.5 to 3.0 measures mean luminance 59.7 -> 13.4
+// while the LIT FRACTION stays at 40%: the same waterline, rendered too dark to read. Widen the
+// blob ratio instead and it clips to white. Both are the same missing term.
+//
+// Written as a ratio against the reference configuration so it is exactly 7200 there -- numerator
+// and denominator are the identical expression on identical values, so the quotient is exactly
+// 1.0f and this cannot perturb a golden hash at the defaults.
+// Pinned to the reference RATIO (5/3), not to PARTSIM_SPLAT_RADIUS_NUM -- using the current ratio
+// here makes it cancel out of the quotient below, and the exposure stops tracking the blob width
+// at all. Identical to kSplatRadiusWorld at the defaults, and only there.
+constexpr float kRefSplatRadius = kRefSpacing * 5.0f / 3.0f;
+constexpr float kSplatExposure =
+    7200.0f *
+    ((kSplatRadiusWorld * kSplatRadiusWorld) / (kRestSpacing * kRestSpacing * kRestSpacing)) /
+    ((kRefSplatRadius * kRefSplatRadius) / (kRefSpacing * kRefSpacing * kRefSpacing));
 enum Channel : uint8_t { kChWater = 0, kChSand = 1, kChHeat = 2, kChannelCount = 3 };
 // Heat is a field, not particles, so its accumulated intensity needs its own scale to land in
 // the same 0..kSplatExposure range the particle channels use.
