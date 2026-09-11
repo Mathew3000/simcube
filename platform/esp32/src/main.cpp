@@ -139,6 +139,22 @@ volatile bool g_showTestPattern = false;
 // rate is worth knowing about.
 volatile uint32_t g_overruns = 0;
 
+// The render/step task's handle, so console commands that REPLACE the simulation can stop it first.
+//
+// runBench and runGolden both call Simulation::init, which tears down and rebuilds the renderer's
+// slot tables and every pool. simTask runs at a higher priority than the console, so without this
+// it preempts mid-init and renders through a half-built Renderer -- observed on hardware as a
+// LoadProhibited inside Renderer::clear(). It survived under QEMU only because the emulator build
+// runs the golden sequence in setup(), before this task exists.
+TaskHandle_t g_simTaskHandle = nullptr;
+
+// Suspends the stepping task around a console command that rebuilds the simulation. Pausing is not
+// enough: simTask calls accumulate() every frame whether or not g_paused is set.
+struct SuspendSim {
+  SuspendSim() { if (g_simTaskHandle) vTaskSuspend(g_simTaskHandle); }
+  ~SuspendSim() { if (g_simTaskHandle) vTaskResume(g_simTaskHandle); }
+};
+
 // One face of RGB, for timing the resolve pass without needing the panel driver.
 uint8_t g_staging[kMaxPanelTexels * 3];
 
@@ -443,6 +459,7 @@ void printStats() {
 // must equal the contents of scripts/golden_hash_esp32.txt.
 #ifndef PARTSIM_PROFILE_ESP32_DISPLAY
 void runGolden() {
+  SuspendSim hold;  // Simulation::init below would otherwise race the render task
 #ifdef PARTSIM_NONDETERMINISTIC_FP
   Serial.println(F("NOTE: built with -ffp-contract=fast, so this hash is EXPECTED to differ."));
   Serial.println(F("      Flash the `cube` environment to check determinism."));
@@ -488,6 +505,7 @@ void runGolden() {
 // frame. Everything else in the budget is downstream of it.
 #ifndef PARTSIM_PROFILE_ESP32_DISPLAY
 void runBench() {
+  SuspendSim hold;  // every g_sim.init() below rebuilds the renderer the sim task is using
   const int counts[] = {320, 640, 960, 1280};
   const int reps = 30;
 
@@ -829,7 +847,7 @@ void setup() {
       Serial.println(F("WARNING: SPI host init failed; running with a null link"));
     }
 #endif
-    xTaskCreatePinnedToCore(masterTask, "master", 6144, nullptr, 2, nullptr, 1);
+    xTaskCreatePinnedToCore(masterTask, "master", 6144, nullptr, 2, &g_simTaskHandle, 1);
   }
 #endif
 #ifdef PARTSIM_PROFILE_ESP32_DISPLAY
@@ -841,14 +859,14 @@ void setup() {
       Serial.println(F("WARNING: SPI device init failed; this node will never receive a frame"));
     }
 #endif
-    xTaskCreatePinnedToCore(displayTask, "display", 6144, nullptr, 2, nullptr, 1);
+    xTaskCreatePinnedToCore(displayTask, "display", 6144, nullptr, 2, &g_simTaskHandle, 1);
   }
 #endif
 #endif  // PARTSIM_MULTINODE
 
 #if !PARTSIM_MULTINODE
   // 6KB of stack: the solver recurses nowhere and every pool is static, so this is generous.
-  xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, nullptr, 1);
+  xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, &g_simTaskHandle, 1);
 #endif
 
   Serial.printf("internal heap free after init: %u B\n",
