@@ -99,8 +99,8 @@ hardware through five interfaces (`Console`, `Clock`, `Display`, `MotionSensor`,
 a HUB75 DMA driver for a new MCU family is 1–2 weeks and remains explicitly **out of scope**;
 display nodes stay ESP32-S3.
 
-**What the work found.** In full in [`W3-FINDINGS.md`](W3-FINDINGS.md) — including a 12 KB saving
-that sounded obvious and was not there. The three worth carrying:
+**What the work found** — the full set is in [`DECISIONS.md`](DECISIONS.md) D42 and D43, including
+a 12 KB saving that sounded obvious and was not there. The three worth carrying here:
 
 *A HAL with one implementation is a rename, not a seam.* So the host build is not a bonus, it is
 the check: `platform/host/console_main.cpp` is a ~120-line second platform, and the `app_golden`
@@ -126,8 +126,17 @@ down rather than rounded to zero.
 
 *The benchmark did not move at all*, which was the actual worry — `splat`, `resolve` and `blit`
 especially, since a change there would mean the refactor had altered the render path. Every column
-reproduced to the hundredth of a millisecond on the same board (see the table in
-`docs/W3-HANDOFF.md` §4).
+reproduced to the hundredth of a millisecond on the same board:
+
+```
+  count    sim/step   splat   resolve    blit    frame    fps
+    128       9.22    6.07      2.60   10.57    35.09   28.5
+    256      30.75   12.38      2.89   10.85    84.72   11.8
+    384      57.46   17.57      3.13   11.10   143.58    7.0
+    512      87.54   21.27      3.37   11.33   207.68    4.8
+```
+
+That table is the regression baseline for anything touching the render path.
 
 ---
 

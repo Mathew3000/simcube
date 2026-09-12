@@ -575,9 +575,36 @@ physics with no board attached.
 
 Cost, measured rather than asserted: +80 B of SRAM on `cube`, `+112` on `master`, `+832` on
 `display` — vtables, line buffers, and members a class can no longer have dead-stripped. The
-benchmark did not move at all; every column reproduced to the hundredth of a millisecond on the
-same board. Full write-up, including the 12 KB saving that turned out not to exist, in
-`W3-FINDINGS.md`; the memory table is in `ROADMAP.md` W3.
+refactor therefore *costs* memory rather than saving it; against a 230 KB budget it is noise, but
+it is the wrong direction and `+832` lands on the tightest budget in the project. The benchmark did
+not move at all: every column reproduced to the hundredth of a millisecond on the same board.
+
+Four smaller results from the same work, each the kind that only a move surfaces:
+
+- **A 12 KB saving that was not there.** `runBench` needs a face of RGB staging, and a display node
+  runs no benchmark, so guarding it out looked like 12 KB off the tightest budget — obvious enough
+  to be written into a comment before being measured. The old buffer was file-scope in an anonymous
+  namespace whose only reference was already inside `#ifndef PARTSIM_PROFILE_ESP32_DISPLAY`, so the
+  linker had been dropping it all along. The measured display delta is `+832`, not `-11,456`. The
+  guard is kept because it is *true*, not because it buys anything.
+- **Scale factors live next to the register write that justifies them.** `MotionSensor` asks the
+  driver for `accelScaleG()` rather than declaring its own constant; `Lsm6dsox` answers with the one
+  sitting beside the `CTRL1_XL` write. A copy in the application layer is a second place for a range
+  change to be missed, and the failure it produces — a truncated gravity vector during exactly the
+  hand-shake the object exists for — is invisible in every unit test. Same reasoning as D36.
+- **`printf` is the one place `-Wdouble-promotion` cannot be obeyed.** Varargs promote `float` to
+  `double` by definition, so every console call site trips it and there is nothing to fix.
+  Suppressed with a scoped pragma in `Console.cpp` and `App.cpp` only, so the flag keeps working
+  everywhere it can still find a real bug.
+- **The seam has a regression check, and it is a grep.** `platform/app` must include only `<c*>` and
+  `partsim/...`:
+
+  ```bash
+  grep -rnE "Arduino|Serial|vTask|xTask|TickType|heap_caps|digitalRead|freertos" \
+    platform/app/src platform/app/include
+  ```
+
+  Four hits today, all prose. A fifth that is not a comment is a regression.
 
 ---
 
