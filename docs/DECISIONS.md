@@ -821,13 +821,10 @@ third-party preprocessor cannot read a `constexpr`, so the choice was to duplica
 Duplicated and **checked**: `PanelDriver.cpp` static_asserts the two against each other, and setting
 the flag wrong was confirmed to fail the build.
 
-### D45. The fast blit verifies itself, and must have verified something **[STANDS]**
+### D46. The fast blit's self-test must have verified something **[STANDS]**
 
-The row-walking blit reaches `MatrixPanel_I2S_DMA::fb`, which is private, through the
-explicit-instantiation idiom ([temp.spec]/6 — legal, not a layout assumption, not UB). The whole
-safety case for that rests on `PanelDriver::verifyFastBlit()`, which at boot writes sample texels
-through the library and through the fast path and compares the raw DMA words. On a mismatch the
-driver keeps the per-texel path for good and says so on the console.
+D45 accepts reading a private member of the HUB75 library, and the whole safety case for that
+rests on `PanelDriver::verifyFastBlit()` passing at boot.
 
 Review found the one hole in that: **it could return true having verified nothing.** It examines
 face 0 only, and skips a row whose mount maps it onto a chain column — so a quarter-turn on face 0
