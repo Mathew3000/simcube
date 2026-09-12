@@ -349,36 +349,99 @@ assumption plus one and a half cycles per instruction. **So the emulator is a le
 measurement instrument for relative work**, good to a few percent once corrected — which is the
 opposite of what this section claimed before hardware existed.
 
-### What that implies for an ESP32-P4
+### Choosing the MCU that runs the solver
 
-The CPI above is the only non-obvious input, and it is measured rather than assumed. Everything
-else is arithmetic:
+The solver is the only part that scales with the processor, and the rendering is expected to live
+on separate nodes, so this is a question about one chip in isolation.
 
-| term | value | status |
+**The ISA ratio is measured, not assumed.** `core/src/Solver.cpp` compiles cleanly for every
+candidate ISA -- it is freestanding portable C++ with no platform headers -- so the same source,
+same `-O2 -ffp-contract=off`, each vendor's own GCC, gives a direct instruction count for
+`solveIteration()`, which is the entire inner solver:
+
+| ISA | bytes | instructions | float ops | vs Xtensa |
+|---|---|---|---|---|
+| Xtensa LX7 (ESP32-S3) | 2435 | 863 | 468 (54.2%) | 1.00x |
+| RV32IMAFC (ESP32-P4) | 2148 | 645 | 345 (53.5%) | **0.75x** |
+| Cortex-M7 | 2176 | 623 | 353 (56.7%) | **0.72x** |
+| Cortex-M4 | 2204 | 627 | 354 (56.5%) | 0.73x |
+| Cortex-M33 | 2208 | 626 | 358 (57.2%) | 0.73x |
+
+This **corrects an assumption recorded here earlier**, which was that RV32 would need 1.0-1.2x
+*more* instructions than Xtensa. It needs 25% fewer, and Thumb-2 needs 28% fewer. The float
+fraction is 54-57% on every target, which confirms the three are compiling the same work rather
+than one of them quietly softening an operation.
+
+Static count is a proxy for dynamic count, and the branch mix is not identical. Treat it as
++-10%, not as a cycle count.
+
+Combining it with the measured S3 CPI of 1.40:
+
+$$\text{relative speed} = \frac{1}{\text{instr ratio}} \times \frac{1.40}{\text{CPI}} \times
+\frac{\text{clock}}{240\,\text{MHz}}$$
+
+| part | core | MHz | instr | CPI | **relative** | CPI basis |
+|---|---|---|---|---|---|---|
+| ESP32-S3 | Xtensa LX7 | 240 | 1.00 | 1.40 | **1.00x** | measured |
+| RP2350 | Cortex-M33 | 150 | 0.73 | 1.50 | **0.80x** | assumed |
+| ESP32-P4 | RV32 x2 | 400 | 0.75 | 1.25 | **2.5x** | assumed |
+| STM32H743 | Cortex-M7 | 480 | 0.72 | 1.20 | **3.2x** | assumed |
+| STM32H7S3 | Cortex-M7 | 600 | 0.72 | 1.20 | **4.1x** | assumed |
+| i.MX RT1062 | Cortex-M7 | 600 | 0.72 | 1.15 | **4.2x** | assumed |
+| i.MX RT1176 | Cortex-M7 | 1000 | 0.72 | 1.15 | **7.1x** | assumed |
+
+**CPI is the weak term and it is the one that decides the answer.** The S3's 1.40 is measured and
+includes its SRAM stalls. Cortex-M7 is dual-issue in-order with a 6-stage pipeline and, crucially,
+**tightly-coupled memory** -- and this workload's working set is ~86 KB at 512 particles, ~170 KB
+at 1024, which fits the DTCM of every M7 above. A gather-heavy scalar float loop running entirely
+out of zero-wait-state memory is close to the best case for that core. If the working set were
+instead served through a small D-cache the numbers would be materially worse.
+
+**What does not help:** SIMD and DSP extensions (the solver is scalar, and Gauss-Seidel resists
+vectorisation), a second core (same reason -- see §Out of scope in the M3.6 plan), large flash,
+and PSRAM bandwidth.
+
+### What beaker mode needs, and why it changes the answer
+
+Milestone 4 mixes coloured liquids. **Colour resolution is set by the blob, not by the particle** --
+chroma is splatted through the same kernel as everything else, so two differently-coloured
+neighbours blur together over the blob's width of `2*d` world units. Distinguishable colour regions
+across the 32-unit cube is therefore about `32/(2*d)`:
+
+| `kRestSpacing` | colour regions across the cube | particles, half-full beaker |
 |---|---|---|
-| clock, 400 MHz vs 240 | **1.67x** | fact |
-| S3 CPI on this workload | **1.40** | measured, above |
-| P4 CPI | 1.1-1.3 | assumed — it has a real cache hierarchy and 768 KB L2MEM, and the working set here is ~86 KB |
-| RV32IMAFC instruction count vs Xtensa LX7 | 1.0-1.2x more | assumed — Xtensa has zero-overhead loops and richer addressing |
+| 1.5 | 10.7 | 4855 |
+| 2.0 | 8.0 | 2048 |
+| **2.5** | **6.4** | **1049** |
+| 3.0 | 5.3 | 607 |
+| 3.5 | 4.6 | 382 |
 
-That brackets the P4 at **1.5-2.0x on the solver, centred near 1.7x** — clock-dominated. An
-earlier estimate in this project of "2-3x" was not derived and is too generous.
+At the 3.0 that ships today a whole beaker is about **5 colour regions wide**. Red pouring into
+blue would read as a few coloured lumps converging, not as mixing. This is the constraint that
+pulls the particle size in the opposite direction from the frame rate, and it is why the coarsening
+lever cannot simply be pulled further.
 
-**And it does not matter much, which is the actual finding.** Only the solver scales with the MCU:
+Taking d=2.5 (1049 particles) as the target, liquid-only so 30 Hz physics is available and the
+frame costs **one** solver step:
 
-| | frame at 375 particles | fps |
-|---|---|---|
-| ESP32-S3, measured | 157.2 ms | 6.4 |
-| ESP32-P4 at 1.7x | 105.1 ms | 9.5 |
-| ESP32-P4 at 2.0x | 94.0 ms | 10.6 |
-| solver free, MCU infinitely fast | 30.7 ms | **32.6** |
+| part | solver/frame | fps | fps if a deep pool costs 1.3x |
+|---|---|---|---|
+| ESP32-S3 | 209.7 ms | 4.8 | 3.7 |
+| RP2350 | 262.5 ms | 3.8 | 2.9 |
+| ESP32-P4 | 84.3 ms | 11.9 | 9.1 |
+| STM32H743 | 64.7 ms | 15.5 | 11.9 |
+| STM32H7S3 | 51.8 ms | 19.3 | 14.9 |
+| i.MX RT1062 | 49.6 ms | 20.2 | 15.5 |
+| i.MX RT1176 | 29.8 ms | 33.6 | **25.8** |
 
-Splat (17.6), blit (11.1) and resolve (3.1) are a **30.7 ms floor that no processor removes**. The
-P4 buys 3 fps; the floor caps everything at 32. The next real lever is not silicon, it is the
-splat footprint and the row-walking blit -- both software, both already identified.
+Solver only -- the render nodes add their own 15-25 ms, in parallel.
 
-(The P4 also has no radio at all, so any P4 master implies a C6/C5 companion over SDIO for
-ESP-NOW. That is unchanged by the above and is a smaller consideration than the floor.)
+The 1.3x column is not pessimism for its own sake: every per-particle figure in this document is
+measured on pools between one and two smoothing radii deep, where a large share of particles are at
+a free surface with fewer neighbours than the bulk. A filled beaker is deeper than anything
+measured so far, and per-particle cost was still climbing at the largest sweep point (0.142, 0.176,
+0.200 ms at n = 256, 384, 512). **This is the single largest source of error in the table and it
+biases every row the same way -- optimistic.**
 
 ### The arithmetic problem that did not need an emulator -- and its answer
 
