@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 // The ONLY file under core/ permitted to include <cmath>, and then only for sqrtf.
 //
 // Why: cross-target bit-determinism. IEEE-754 requires sqrt to be correctly rounded, so
@@ -26,6 +27,38 @@ inline int iclamp(int x, int lo, int hi) { return imin(imax(x, lo), hi); }
 
 // Reciprocal sqrt. Prefer x * prsqrt(d2) over x / psqrt(d2): one Newton-Raphson chain
 // instead of a sqrt chain followed by a ~20-cycle Xtensa division sequence.
+// Reciprocal square root without a divide and without a sqrt.
+//
+// This is not micro-optimisation, it is the single largest cost in the solver. The ESP32-S3's FPU
+// implements NEITHER divide nor square root: GCC emits a call to __divsf3 -- a *software* float
+// divide -- and a call to sqrtf for every one. `nm -u` on Solver.o shows both as unresolved
+// externals on Xtensa and neither on Cortex-M7, which has vdiv.f32 and vsqrt.f32 as single
+// instructions. The inner loop performs roughly 260 of those calls per particle per step.
+//
+// Newton-Raphson from the classic bit-pattern seed, three iterations, multiplies and adds only.
+// Relative error is ~1e-7, i.e. float precision for this purpose.
+//
+// It is also BETTER for determinism than the hardware it replaces, not merely faster: the same
+// sequence of multiplies and adds runs on every target under -ffp-contract=off, so there is no
+// dependence on a libm implementation agreeing across three toolchains.
+inline float frsqrt(float x) {
+  if (!(x > 0.0f)) return 0.0f;  // also catches NaN, which the bit trick would propagate
+  const float half = 0.5f * x;
+  uint32_t i;
+  __builtin_memcpy(&i, &x, sizeof i);
+  i = 0x5f3759dfu - (i >> 1);
+  float y;
+  __builtin_memcpy(&y, &i, sizeof y);
+  y = y * (1.5f - half * y * y);
+  y = y * (1.5f - half * y * y);
+  y = y * (1.5f - half * y * y);
+  return y;
+}
+
+// Exact reciprocal square root. Used where precision matters more than speed and the call is not
+// in a loop -- geometry setup, the CFL clamp, vector normalisation. frsqrt's ~1e-7 is enough for a
+// kernel gradient and NOT enough here: routed through frsqrt, Geometry::cube's panel origins land
+// at -15.9999981 instead of -16.
 inline float prsqrt(float x) { return 1.0f / sqrtf(x); }
 
 constexpr float kPi = 3.14159265358979323846f;

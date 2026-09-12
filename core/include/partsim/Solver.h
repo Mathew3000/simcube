@@ -34,6 +34,19 @@ struct Kernels {
     const float t = h - r;
     return rv * (spikyC * t * t / r);
   }
+
+  // The same gradient, taken from the SQUARED distance, which is what every caller already has.
+  //
+  // One frsqrt yields both quantities the formula needs -- 1/r directly, and r as r2 * (1/r) --
+  // where the r-taking form above costs a sqrt AND a divide, neither of which the ESP32-S3's FPU
+  // implements. See frsqrt in Math.h. This is the hot path; the form above is kept for tests and
+  // for callers that already hold r.
+  Vec3 spikyGradR2(Vec3 rv, float r2) const {
+    if (r2 < 1e-10f || r2 >= h2) return Vec3{0.0f, 0.0f, 0.0f};
+    const float invR = frsqrt(r2);
+    const float t = h - r2 * invR;
+    return rv * (spikyC * t * t * invR);
+  }
 };
 
 // Water and sand parameter table; scenes may substitute their own.

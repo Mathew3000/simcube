@@ -105,10 +105,15 @@ TEST(solver_rest_density_normalisation) {
 
 TEST(solver_hydrostatic_rest) {
   // Four smoothing radii deep, so most of the fluid is interior rather than free surface.
-  // 1500 steps, not 400: a pool four smoothing radii deep has far more momentum to shed than the
-  // shallow one this fixture used to build. Measured convergence at spacing 3.0 -- mean|v| 1.09 at
-  // 400 steps, 0.52 at 900, 0.053 at 1500, 0.000 at 2500. It does settle; it is not a limit cycle.
-  const SimVolume v = settleToDepth(4.0f * kSmoothRadius, 1500, Vec3{0.0f, -kGravityMag, 0.0f});
+  // 2500 steps. A pool four smoothing radii deep has far more momentum to shed than the shallow
+  // one this fixture used to build, and the approach to rest is long and shallow: measured at
+  // spacing 3.0, mean|v| 1.09 at 400 steps, 0.52 at 900, 0.000 at 2500.
+  //
+  // It sat at 1500 for a while and that was luck. At 1500 the reading is anywhere between 0.05 and
+  // 0.85 depending on the trajectory -- a last-ulp change (hoisting one reciprocal out of a loop)
+  // moved it from 0.053 to 0.568 without touching the physics. A threshold that a rounding change
+  // can cross is measuring chaos, not convergence. 2500 is past the knee for every variant tried.
+  const SimVolume v = settleToDepth(4.0f * kSmoothRadius, 2500, Vec3{0.0f, -kGravityMag, 0.0f});
   const Aabb& b = v.box();
 
   int outside = 0, moving = 0, bad = 0;
@@ -146,7 +151,7 @@ TEST(solver_column_density_is_uniform_with_depth) {
   // against the floor by 1.5x while the measured density still read 1.0. A uniform
   // profile is the signature of a correct boundary.
   const float depth = 4.0f * kSmoothRadius;
-  const SimVolume v = settleToDepth(depth, 1500, Vec3{0.0f, -kGravityMag, 0.0f});
+  const SimVolume v = settleToDepth(depth, 2500, Vec3{0.0f, -kGravityMag, 0.0f});
   const Aabb& b = v.box();
 
   // One band per smoothing radius, and only the bands BELOW the top one -- the surface band is

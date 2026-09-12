@@ -123,7 +123,7 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
       const float r2 = length2(rv);
       if (r2 >= k_.h2) return;
       rho += mass_ * k_.poly6(r2);
-      const Vec3 gj = k_.spikyGrad(rv, psqrt(r2)) * w;
+      const Vec3 gj = k_.spikyGradR2(rv, r2) * w;
       gradI += gj;
       sumGrad2 += length2(gj);
     });
@@ -146,6 +146,7 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
   // deterministic because the particle order is a pure function of position.
   const float dq = 0.2f * k_.h;
   const float wq = k_.poly6(dq * dq);
+  const float invWq = 1.0f / wq;
   for (int i = 0; i < n; ++i) {
     const float li = p.lam[i];
     const Vec3 pi = p.pred(i);
@@ -159,12 +160,15 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
 
       // Macklin's artificial pressure. Without it particles cluster into strings, and the
       // effect is worse at low iteration counts, not better.
-      float ratio = k_.poly6(r2) / wq;
+      //
+      // Multiply by the reciprocal: wq is loop-invariant, and a float divide is a call to
+      // __divsf3 on Xtensa rather than an instruction.
+      float ratio = k_.poly6(r2) * invWq;
       float t = 1.0f;
       for (int e = 0; e < kSCorrN; ++e) t *= ratio;
       const float sCorr = -sCorrK_ * t;
 
-      dp += k_.spikyGrad(rv, psqrt(r2)) * (li + p.lam[j] + sCorr);
+      dp += k_.spikyGradR2(rv, r2) * (li + p.lam[j] + sCorr);
     });
     dp *= w;
 
