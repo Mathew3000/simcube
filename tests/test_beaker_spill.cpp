@@ -361,3 +361,54 @@ TEST(spill_carries_its_dye_into_the_next_cube) {
   CHECK(redAfter < (double)kChromaOne * pb.n);
 }
 #endif
+
+TEST(spill_an_open_face_holds_no_phantom_neighbours) {
+  // Guards the FOURTH place the box asserts itself -- the wall-density compensation, which the
+  // handoff did not count and which `wallDensityAt` gets right only because of one subtraction.
+  //
+  // This test exists because removing that subtraction passed all 183 other cases. The pour still
+  // happens without it, roughly half as fast, and nothing said so: exactly the failure the fix was
+  // written to describe. A correction whose absence no test notices is one line from coming back.
+  //
+  // Asserted on the physics rather than on a drain rate: a wall hides neighbours and gets their
+  // mass added back, so an OPEN face -- which hides nothing -- must have exactly that much less.
+  Geometry g = Geometry::cube(32, 1.0f);
+  SimVolume closed, open;
+  CHECK(closed.build(g, kSlabDepth, kCellSize));
+  CHECK(open.build(g, kSlabDepth, kCellSize));
+  open.setOpenFace(kOpenPosY);
+
+  Solver s;
+  s.init();
+  Particles p;
+  SpatialHash h;
+  static float scratch[kMaxParticles];
+
+  // One particle, a quarter of a smoothing radius below the +Y face, so the compensation for that
+  // face is large and the other five are identical between the two volumes.
+  const float d = 0.25f * kSmoothRadius;
+  const Vec3 at{0.0f, closed.box().hi.y - d, 0.0f};
+  p.clear();
+  CHECK(p.add(at, Vec3{0, 0, 0}, kWater));
+  p.setPred(0, at);
+  CHECK(h.build(closed, p, scratch));
+
+  const float rhoClosed = s.densityAt(p, closed, h, 0, 1.0f);
+  const float rhoOpen = s.densityAt(p, open, h, 0, 1.0f);
+  const float expected = s.wallFraction(d);
+
+  std::printf("       rho at %.2f below the face: closed %.4f, open %.4f, difference %.4f "
+              "(wallFraction %.4f)\n", (double)d, (double)rhoClosed, (double)rhoOpen,
+              (double)(rhoClosed - rhoOpen), (double)expected);
+
+  CHECK(rhoOpen < rhoClosed);                            // the lid is gone
+  CHECK_NEAR(rhoClosed - rhoOpen, expected, 1e-5);       // and gone by exactly its own share
+  // Far from the open face nothing changes: the correction is local to that wall, not a global
+  // scale on the whole term.
+  const Vec3 deep{0.0f, closed.box().lo.y + d, 0.0f};
+  p.clear();
+  CHECK(p.add(deep, Vec3{0, 0, 0}, kWater));
+  p.setPred(0, deep);
+  CHECK(h.build(closed, p, scratch));
+  CHECK_NEAR(s.densityAt(p, closed, h, 0, 1.0f), s.densityAt(p, open, h, 0, 1.0f), 1e-5);
+}
