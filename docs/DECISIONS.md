@@ -645,6 +645,36 @@ reasonable the change looks, so the reason lives on the member declaration.
 
 Zero SRAM cost: every one of the eight firmware environments is byte-identical afterwards.
 
+### D44. The second core scales at 1.98x, and the doubt about it was wrong **[STANDS]**
+
+P2 values the eight-colour parallelisation at ~1.8x, which was an estimate. Before building a
+week's work on it, the ceiling was measured — `platform/esp32/probe/core_scaling.cpp`, built by
+`[env:scaling]`, runs the solver's gather shape on one core and then on both, against a working set
+the size of the real thing (72 KB, all internal SRAM).
+
+| reps | one core | both, wall clock | speedup |
+|---|---|---|---|
+| 4 | 17 351 us | 17 575 us | **1.97x** |
+| 8 | 34 700 us | 35 081 us | **1.98x** |
+| 16 | 69 391 us | 70 086 us | **1.98x** |
+| 32 | 138 776 us | 140 075 us | **1.98x** |
+
+**The specific doubt was that this would not hold.** The solver is gather-dominated — 88 candidate
+reads per particle, 27% useful — and its measured CPI of 1.40 is largely memory stalls, on a part
+whose internal SRAM has no per-core data cache. Two cores gathering from the same arrays looked
+likely to contend at the bus matrix. They do not: the second core costs about 1%, because the S3's
+SRAM is multi-banked and the bus matrix serves both CPUs concurrently.
+
+So the estimate was conservative rather than optimistic, and what will actually cost P2 its margin
+is barrier overhead between colour classes, not memory. That is a solvable engineering problem
+rather than a property of the silicon.
+
+Recorded as a decision because the *method* is the point: four entries in §9 are unmeasured
+multipliers that drove real work. An hour of probe before a week of implementation is the cheapest
+insurance this project has found. The probe is kept rather than deleted — the same question has to
+be asked of any candidate in CUBE-PCB §13.1, and the answer will differ on a part with a real cache
+hierarchy.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A
