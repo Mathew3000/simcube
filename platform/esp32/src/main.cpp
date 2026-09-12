@@ -47,7 +47,9 @@ constexpr int kFaces = 6;
 // Panel resolution comes from core's capacity profile, not a local copy. There used to be a
 // duplicate here that was only used for the boot banner -- so it could not break anything, but it
 // could print a lie, which is worse in a message someone reads during bring-up.
-constexpr uint8_t kColorDepthBits = 6;
+// From Config.h, so the firmware and scripts/check_esp32_budget.sh cannot disagree about the
+// DMA framebuffer size. See kColourBits.
+constexpr uint8_t kColorDepthBits = (uint8_t)kColourBits;
 constexpr uint8_t kDefaultBrightness = 96;
 constexpr int kTargetFps = 30;
 constexpr float kImuDt = 1.0f / 208.0f;

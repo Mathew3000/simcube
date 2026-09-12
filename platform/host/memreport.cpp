@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
   const int chainW = side * kMaxRenderPanels;
   // Only charge for a DMA buffer if this role actually has a HUB75 connector. The master does not,
   // and charging it 48KB for a chain it never drives overstated it by nearly 40%.
-  const size_t dma = PARTSIM_DRIVES_PANELS ? hub75Bytes(chainW, side, 6, true) : 0u;
+  const size_t dma = PARTSIM_DRIVES_PANELS ? hub75Bytes(chainW, side, kColourBits, true) : 0u;
   const size_t staging = PARTSIM_DRIVES_PANELS ? (size_t)kMaxPanelTexels * 3u : 0u;
 
   // A role that does not run the solver carries RenderState's draw-only containers instead of a
@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
   // the particle state arrives whole over SPI because any particle can light any face.
   std::printf("\n  display-node topology (64x64 faces, DMA 6-bit double-buffered)\n");
   const size_t accumPerFace = (size_t)kMaxPanelTexels * kChannelCount * sizeof(uint16_t);
-  const size_t dmaPerFace = hub75Bytes(side, side, 6, true);
+  const size_t dmaPerFace = hub75Bytes(side, side, kColourBits, true);
   // Real sizeofs now that RenderState exists, rather than the 16 B/particle estimate this used
   // to carry. Floats, not the wire's int16/int8: dequantising once at decode beats doing it per
   // panel inside the splat loop, and it keeps one splat implementation for both roles.

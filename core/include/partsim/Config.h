@@ -456,4 +456,31 @@ constexpr float kHeatGain = 5200.0f;
 // mostly-cold volume.
 constexpr uint8_t kHeatFloor = 6;
 
+// --- colour depth ----------------------------------------------------------
+// Bits per channel the panels actually display, via HUB75 binary-coded modulation.
+//
+// It lives here rather than in the firmware because it is a BUDGET number as much as a look: the
+// DMA framebuffer is rows x width x 2B x bits, so it scales linearly. At 64x64 with two faces,
+// 6-bit is 96KB and 4-bit is 64KB -- and scripts/check_esp32_budget.sh has to model the same value
+// the driver is given, or the budget describes a build nobody flashes.
+//
+// 6 is what the refresh measurement of ~141Hz at HZ_16M was taken at. Lowering it RAISES the
+// achievable refresh as well as freeing memory; the cost is visible banding in the dim end of a
+// ramp, which is where fluid spends most of its range.
+#ifndef PARTSIM_COLOUR_BITS
+#define PARTSIM_COLOUR_BITS 6
+#endif
+constexpr int kColourBits = PARTSIM_COLOUR_BITS;
+static_assert(kColourBits >= 1 && kColourBits <= 8, "HUB75 colour depth is 1..8 bits");
+
+// Whether resolve() rounds its 8-bit output down to what the panel can actually show.
+//
+// Off by default, and deliberately: the panel does this in hardware by taking the top kColourBits,
+// so enabling it changes nothing on the device and only makes the BROWSER honest about the
+// banding. That is worth having -- the browser is meant to predict the hardware -- but it moves
+// the golden pixel hash, so it is a per-tier choice rather than a silent default.
+#ifndef PARTSIM_QUANTISE_OUTPUT
+#define PARTSIM_QUANTISE_OUTPUT 0
+#endif
+
 }  // namespace partsim

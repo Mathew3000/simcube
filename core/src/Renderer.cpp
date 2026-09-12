@@ -201,9 +201,26 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
 #endif
 
     uint8_t* o = out + (std::size_t)i * (std::size_t)bytesPerTexel;
+#if PARTSIM_QUANTISE_OUTPUT
+    // Round to what the panel can actually display. The hardware already does this by taking the
+    // top kColourBits of each channel, so on the device this changes nothing -- it makes the
+    // BROWSER show the same banding, which is the whole point of the browser.
+    //
+    // Shift down and replicate the high bits back up rather than shifting down and up, so full
+    // scale stays 255 instead of collapsing to 252 at 6 bits.
+    constexpr int kDrop = 8 - kColourBits;
+    auto q = [](int v) {
+      const int t = imin(255, v) >> kDrop;
+      return (uint8_t)((t << kDrop) | (t >> imax(0, kColourBits - kDrop)));
+    };
+    o[0] = q(r);
+    o[1] = q(gg);
+    o[2] = q(b);
+#else
     o[0] = (uint8_t)imin(255, r);
     o[1] = (uint8_t)imin(255, gg);
     o[2] = (uint8_t)imin(255, b);
+#endif
     if (bytesPerTexel == 4) o[3] = 255;
   }
 }
