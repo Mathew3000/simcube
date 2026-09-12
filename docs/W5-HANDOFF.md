@@ -21,7 +21,7 @@ Read in this order:
 | document | what it gives you |
 |---|---|
 | [`SIMULATION.md`](SIMULATION.md) §6 | how rendering works — panels, splatting, resolve |
-| [`DECISIONS.md`](DECISIONS.md) §9 | the six reversals. **Read these.** |
+| [`DECISIONS.md`](DECISIONS.md) §9 | the seven reversals. **Read these.** |
 | [`ROADMAP.md`](ROADMAP.md) | the capability ladder and the measured baselines |
 | [`RESOURCES.md`](RESOURCES.md) | per-role budget and every hardware measurement |
 

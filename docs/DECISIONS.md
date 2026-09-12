@@ -3,7 +3,7 @@
 Why the project is the way it is. One entry per decision that was not obvious, with the evidence
 that settled it and — where it exists — the reasoning that turned out to be wrong.
 
-**Read the reversals first (§9).** Six decisions in this project were made on plausible reasoning
+**Read the reversals first (§9).** Seven decisions in this project were made on plausible reasoning
 and later overturned by measurement. Those are the most useful entries here, because each one is a
 pattern that will recur.
 
@@ -333,7 +333,7 @@ See §9. The performance argument is gone; the memory and blit arguments stand o
 
 ## 9. Decisions that were reversed
 
-The six most useful entries in this file.
+The seven most useful entries in this file.
 
 ### R1. "One S3 cannot drive six 64×64 panels"
 
@@ -379,6 +379,23 @@ achievable. At the counts that actually run it is 64.5 KB and it is the largest 
 
 **The pattern: a rejection inherited from an invalidated premise is not a decision, it is a
 leftover.** Worth re-auditing the others whenever a foundational number moves.
+
+### R7. "Eight-colour partitioning is worth ~1.8x"
+
+Written into this file as an open proposal with a confident multiplier and a correctness argument
+that read as a proof. Both were wrong, in different ways — the argument reasoned about the kernel
+radius while the code reads through a cache that extends 15% further, and the speedup measured
+1.08x rather than 1.8x because the grid is 216 cells and 27 barriers do not amortise across 8 cells
+each.
+
+**The pattern, and it is the sharpest instance of it here: a correctness argument is not a proof
+until the thing it reasons about is the thing the code actually does.** The argument was about
+`kSmoothRadius`. The code reads `kNeighbourRadius`. Those differ by a factor this project itself
+introduced, deliberately, and recorded two entries earlier.
+
+What saved it was measuring before shipping rather than after: the ceiling probe (D44) came first,
+the sound-but-slow version was built and measured, and the whole thing was reverted with the
+golden hashes back where they started.
 
 ### R6. "RV32 needs 1.0–1.2× more instructions than Xtensa"
 
@@ -461,22 +478,50 @@ a quarter of the area.
 Risk to check on a render before believing it: colour may look detached from the fluid's brightness
 at the surface.
 
-### P2. Eight-colour cell partitioning — parallelism without breaking determinism **[OPEN]**
+### P2. ~~Eight-colour cell partitioning~~ — **MEASURED AND REJECTED**
 
-Colour each grid cell by `(x&1, y&1, z&1)`. Process colours sequentially; within a colour, all
-particles in parallel.
+Proposed as ~1.8x by colouring cells `(x&1, y&1, z&1)`, processing colours in sequence and
+splitting each colour across cores. Built, measured, reverted. Two separate things were wrong.
 
-Correctness: cell size is exactly `h`, so two same-colour cells are ≥2 cells apart and their
-closest particles are ≥`h` apart, where the kernel is exactly zero. A particle reads only its 27
-surrounding cells, and a same-colour cell is never among them. Each particle writes only its own
-position. **Writes are disjoint and no thread reads a position another is writing** — no locks, no
-atomics.
+**The scheme was unsound as specified.** The argument was that same-colour cells are ≥2 apart, so
+their closest particles are ≥`h` apart, where the kernel is exactly zero. True of the **kernel**
+and false of the **cache**: `kNeighbourRadius` is 1.15h (D18), so the list a particle reads through
+holds neighbours out to 6.9 units while stride-2 same-colour cells put particles as close as 6.0.
+A cached neighbour can therefore sit in a cell another core is writing, and the distance test that
+would reject it happens *after* the read. Stride 3 — 27 classes — fixes it: 2h against 1.15h, a
+1.74x margin. **The flaw was present when P2 was written**, because the margin already existed.
 
-Deterministic: fixed colour order, and within a colour the order is irrelevant because there are no
-interactions. The result differs from today's sequential order, so the hash moves once.
+**And with the sound version, the speedup is not there.** Measured on hardware against the
+already-parallel baseline of D44:
 
-Worth ~1.8× on the S3's idle second core, and it applies to every candidate MCU — roughly a tier of
-silicon.
+| particles | hazard-free passes only | + 27-colour correction |
+|---|---|---|
+| 128 | 8.06 ms | **8.35** (worse) |
+| 256 | 26.14 | 24.67 (1.06x) |
+| 384 | 49.04 | 45.36 (1.08x) |
+| 512 | 74.66 | 68.60 (1.09x) |
+
+The reason is problem size, and it is structural. `kCellSize` is `h` = 2*`kRestSpacing`, so a
+32-unit box is a **6x6x6 grid — 216 cells**. Split into 27 classes that is **8 cells per class**,
+and a class is a barrier. There is not enough cell-level parallelism to amortise 27 barriers per
+pass, and at 128 particles the barriers cost more than the split saves.
+
+The price of taking 1.08x anyway would be steep: both golden hashes move, and colour ordering
+settles **60% slower** — 4000 steps to rest where index order takes 2500, because index order
+sweeps space monotonically and propagates each correction as a wave, while colour order breaks
+that into 27 interleaved sub-sweeps. Slower settling is visible shimmer on a cube; D18 already
+refused a faster neighbour cache for exactly that reason.
+
+So the Gauss-Seidel passes stay single-core. What shipped instead is D44: the four passes that are
+hazard-free by inspection, parallelised with **no reordering at all**, for a measured 1.17x and
+both hashes unmoved.
+
+**If this is revisited**, the thing to change is the problem size, not the colouring. Finer
+particles mean a finer grid — at `kRestSpacing` 1.5 the grid is 11^3 = 1331 cells and a class is 49,
+which is a different calculation entirely. The `beaker` and `future` tiers are where this becomes
+worth re-measuring. A Jacobi correction pass is the other route: it needs a 3N delta buffer, which
+D14 rejected at 4096 particles and which is 6 KB at the counts that actually run — the same
+inherited-from-an-invalidated-premise shape as R5.
 
 ### P3. Row-walking blit and a circular splat bound **[OPEN]**
 
