@@ -29,6 +29,9 @@
 
 #include "Lsm6dsox.h"
 #include "CoreParallel.h"
+#if PARTSIM_ENABLE_RADIO
+#include "EspNowLink.h"
+#endif
 #include "PanelDriver.h"
 #include "Pins.h"
 #include "RoleStraps.h"
@@ -122,6 +125,15 @@ SpiDisplayLink g_spiDisplay;
 #endif
 
 CoreParallel g_coreParallel;
+#if PARTSIM_ENABLE_RADIO
+EspNowLink g_chain;
+// Bring-up state for the `n` console command: synthetic spill packets, so the transport and the
+// wire format can be proven across two boards before item B exists to produce real ones.
+partsim::SpillReceiver g_chainRx;
+uint32_t g_chainSeq = 0;
+uint32_t g_chainTotalOut = 0;
+uint32_t g_chainIn = 0;
+#endif
 Platform g_plat{&g_console, &g_clock, &g_panels, &g_imu, &g_nullLink, &g_hooks};
 App g_app(g_plat);  // ~137KB of pools, so global rather than anywhere near a stack
 
@@ -309,6 +321,31 @@ void setup() {
   g_console.println("QEMU: done");
 #endif
 
+  // --- things every solver-running role needs, before the role branch ---------------------------
+  //
+  // BEFORE the branch, and that placement is the whole point. Both of these were first written
+  // inside the single-node #else below, which meant the MASTER -- the one board in a multi-node
+  // cube whose entire job is the solver -- never got its second core. The build succeeded, the
+  // tests passed, and the only symptom was a master running at half the speed it was measured at.
+#if PARTSIM_RUNS_SOLVER
+  if (g_coreParallel.begin(0, 2)) {
+    // Pinned to core 0, which otherwise holds only the IMU poll, and started before the step task
+    // so the worker is already parked on its notification when the first frame runs. Priority
+    // matches the step task: lower would let imuTask stall half of every split, which shows up as
+    // a frame time that is occasionally double.
+    g_app.setParallel(&g_coreParallel);
+  } else {
+    g_console.println("WARNING: second-core worker failed to start; solver stays single-core");
+  }
+#endif
+#if PARTSIM_ENABLE_RADIO && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+  if (g_chain.begin()) {
+    g_console.println("chain: ESP-NOW up (broadcast)");
+  } else {
+    g_console.println("WARNING: ESP-NOW peer/callback failed; no chaining");
+  }
+#endif
+
   // --- the stepping task. One image, every board: which one runs is a fact about the straps. ---
 #if PARTSIM_MULTINODE
 #ifdef PARTSIM_PROFILE_ESP32_MASTER
@@ -336,15 +373,6 @@ void setup() {
 #endif
 #else
   // 6KB of stack: the solver recurses nowhere and every pool is static, so this is generous.
-  // The solver's second core. Started before the step task so the worker is already parked on its
-  // notification when the first frame runs, and pinned to core 0, which otherwise holds only the
-  // IMU poll. Priority matches the step task: a lower one would let imuTask stall half of every
-  // split, which shows up as a frame time that is occasionally double.
-  if (g_coreParallel.begin(0, 2)) {
-    g_app.setParallel(&g_coreParallel);
-  } else {
-    g_console.println("WARNING: second-core worker failed to start; solver stays single-core");
-  }
   xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, &Esp32Hooks::g_stepTask, 1);
 #endif
 
@@ -356,5 +384,50 @@ void loop() {
   // The console. Runs as Arduino's loopTask on core 1 at priority 1, below the stepping task, so
   // it only gets time while the simulation is blocked in vTaskDelayUntil.
   g_app.consolePoll();
+
+#if PARTSIM_ENABLE_RADIO && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+  // Chain bring-up: SYNTHETIC spill, once a second, until item B produces real spill to send.
+  //
+  // Here rather than behind a console command because the console dispatch lives in the
+  // platform-neutral App, and ESP-NOW has no business in a layer that compiles for the host. It is
+  // scaffolding: when the spill queue exists this becomes a drain of it on the step task.
+  if (g_chain.ready()) {
+    static uint32_t lastSend = 0;
+    const uint32_t now = millis();
+    if (now - lastSend >= 1000) {
+      lastSend = now;
+      partsim::SpillParticle items[4];
+      for (int i = 0; i < 4; ++i) {
+        items[i].pos = Vec3{-15.0f + (float)i, 12.0f, 0.0f};
+        items[i].vel = Vec3{0.0f, -8.0f, 0.0f};
+#if PARTSIM_ENABLE_CHROMA
+        items[i].cr = (uint16_t)(kChromaOne);  // red, so a receiver can see dye survive the air
+        items[i].cg = 0;
+#endif
+      }
+      g_chainTotalOut += 4;
+      partsim::SpillHeader h;
+      h.seq = ++g_chainSeq;
+      h.totalOut = g_chainTotalOut;
+      uint8_t buf[partsim::kSpillMaxPayload];
+      const int n = partsim::encodeSpill(h, items, 4, g_app.volume().box(), buf, sizeof buf);
+      if (n > 0) g_chain.send(buf, n);
+    }
+
+    uint8_t rx[partsim::kSpillMaxPayload];
+    int len;
+    while ((len = g_chain.poll(rx, sizeof rx)) > 0) {
+      partsim::SpillParticle got[partsim::kSpillMaxPerPacket];
+      partsim::SpillHeader h;
+      const int m = partsim::decodeSpill(rx, len, g_app.volume().box(), got,
+                                         partsim::kSpillMaxPerPacket, h);
+      if (m < 0) continue;  // not ours, or damaged -- decodeSpill validated before writing
+      const uint32_t missed = g_chainRx.note(h, m);
+      g_chainIn += (uint32_t)m;
+      g_console.printf("chain rx: seq %u, %d particles, total %u, missed %u (shortfall %u)\n", h.seq,
+                       m, g_chainIn, missed, g_chainRx.shortfall());
+    }
+  }
+#endif
   delay(10);
 }

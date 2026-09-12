@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+
 #include "partsim/Config.h"
 #include "partsim/Types.h"
 
@@ -66,6 +68,78 @@ struct SpillQueue {
     items[count++] = s;
     return true;
   }
+};
+
+// --- the wire format between chained cubes ---------------------------------------------------
+//
+// ESP-NOW carries at most 250 bytes per packet, which is the constraint everything below is shaped
+// by. Particles are quantised exactly the way SimFrame does it -- uint16 position across the
+// container box, int8 velocity -- because the two formats face the same problem and a second
+// convention would be a second thing to get wrong.
+//
+// Header is 16 bytes: magic(2), version(1), flags(1), seq(4), totalOut(4), count(2), and a
+// Fletcher-16(2) over everything before it. Sixteen rather than twelve costs nothing -- both leave
+// room for the same 18 particles, because 13 does not divide the difference -- and twelve had no
+// room for totalOut, which is the field the entire shortfall mechanism is built on.
+constexpr uint16_t kSpillMagic = 0x5350;  // 'SP'
+constexpr uint8_t kSpillVersion = 1;
+constexpr int kSpillHeaderBytes = 16;
+constexpr int kSpillBytesPerParticle = 6 + 3 + 4;  // pos(3x uint16), vel(3x int8), cr+cg
+constexpr int kSpillMaxPayload = 250;              // ESP-NOW's limit, not ours
+constexpr int kSpillMaxPerPacket = (kSpillMaxPayload - kSpillHeaderBytes) / kSpillBytesPerParticle;
+
+struct SpillHeader {
+  uint32_t seq = 0;       // packet counter, so a receiver can spot a gap
+  uint32_t totalOut = 0;  // the SENDER's cumulative spill count at the end of this packet
+  uint16_t count = 0;     // particles in this packet
+};
+
+// Returns bytes written, or 0 if it did not fit or n exceeds kSpillMaxPerPacket.
+int encodeSpill(const SpillHeader& h, const SpillParticle* items, int n, const Aabb& box,
+                uint8_t* out, int cap);
+
+// Returns the number of particles decoded, or -1 if the packet is not one of ours. Validates
+// magic, version, length and checksum BEFORE writing anything into `out`.
+int decodeSpill(const uint8_t* in, int len, const Aabb& box, SpillParticle* out, int cap,
+                SpillHeader& h);
+
+// Tracks one inbound link and reports how many particles went missing.
+//
+// A dropped packet in a closed ring is volume that never comes back, and the symptom -- beakers
+// slowly emptying over minutes -- reads as a physics leak rather than as a lost radio frame. The
+// sender's cumulative totalOut is what tells the two apart: it advances by exactly the number of
+// particles it has ever spilled, so a receiver that has seen fewer knows the difference and can
+// make it up.
+class SpillReceiver {
+ public:
+  // Call with each decoded header. Returns how many particles were missed since the last packet --
+  // zero in the normal case. The first packet ever seen establishes the baseline and reports 0,
+  // because a receiver joining a running chain has not "lost" the history before it.
+  uint32_t note(const SpillHeader& h, int decoded) {
+    if (!started_) {
+      started_ = true;
+      seen_ = h.totalOut;
+      lastSeq_ = h.seq;
+      return 0;
+    }
+    lastSeq_ = h.seq;
+    const uint32_t expected = h.totalOut;         // what the sender has spilled in total
+    seen_ += (uint32_t)decoded;                   // what this receiver has actually taken
+    if (expected <= seen_) return 0;
+    const uint32_t missing = expected - seen_;
+    seen_ = expected;  // do not report the same shortfall twice
+    shortfall_ += missing;
+    return missing;
+  }
+  uint32_t shortfall() const { return shortfall_; }
+  uint32_t lastSeq() const { return lastSeq_; }
+  bool started() const { return started_; }
+
+ private:
+  bool started_ = false;
+  uint32_t seen_ = 0;
+  uint32_t lastSeq_ = 0;
+  uint32_t shortfall_ = 0;
 };
 
 }  // namespace partsim
