@@ -821,6 +821,28 @@ third-party preprocessor cannot read a `constexpr`, so the choice was to duplica
 Duplicated and **checked**: `PanelDriver.cpp` static_asserts the two against each other, and setting
 the flag wrong was confirmed to fail the build.
 
+### D45. The fast blit verifies itself, and must have verified something **[STANDS]**
+
+The row-walking blit reaches `MatrixPanel_I2S_DMA::fb`, which is private, through the
+explicit-instantiation idiom ([temp.spec]/6 — legal, not a layout assumption, not UB). The whole
+safety case for that rests on `PanelDriver::verifyFastBlit()`, which at boot writes sample texels
+through the library and through the fast path and compares the raw DMA words. On a mismatch the
+driver keeps the per-texel path for good and says so on the console.
+
+Review found the one hole in that: **it could return true having verified nothing.** It examines
+face 0 only, and skips a row whose mount maps it onto a chain column — so a quarter-turn on face 0
+skipped both passes, returned success, and would have enabled the fast path on whichever *other*
+face is mounted square, on the strength of no evidence.
+
+Not reachable as the code stands: `defaultMounts` gives every face rotation 0, and the `m` command
+can only change a mount after `begin()` has already verified. It becomes reachable the moment
+mounts persist across a reboot — which is exactly what Milestone 4 specifies for chain
+configuration. Fixed by tracking whether any row was actually compared and returning that.
+
+The general form is worth keeping: **a self-test that can silently test nothing is worse than no
+self-test**, because the thing it licenses — here, reading a third-party private member — is
+accepted on the strength of it.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A

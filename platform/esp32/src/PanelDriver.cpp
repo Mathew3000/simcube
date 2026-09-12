@@ -154,6 +154,15 @@ bool PanelDriver::verifyFastBlit() {
   if (w < 2 || w > kPanelRes) return false;
   const int h = chain_.chainHeight();
 
+  // Whether any row was actually compared. Without this the loop below can skip BOTH passes and
+  // return true having verified nothing: it only ever looks at face 0, and a quarter-turn mount
+  // maps that face's rows onto chain columns, which it skips. The fast path would then be enabled
+  // on the strength of no evidence, and used on whichever other face is mounted square.
+  //
+  // Not reachable today -- defaultMounts gives every face rotation 0, and the `m` command can only
+  // change one after begin() has already verified -- but it becomes reachable the moment mounts
+  // persist across a reboot, which is exactly what Milestone 4 specifies for chain configuration.
+  bool verified = false;
   uint16_t ref[8 * kPanelRes];
   for (int pass = 0; pass < 2; ++pass) {
     const int j = pass == 0 ? 0 : h - 1;
@@ -189,8 +198,9 @@ bool PanelDriver::verifyFastBlit() {
     snapRow(fb, run, w, mine);
     for (int i = 0; i < depth_ * w; ++i)
       if (mine[i] != ref[i]) return false;
+    verified = true;
   }
-  return true;
+  return verified;
 #endif
 }
 
