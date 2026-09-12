@@ -29,3 +29,9 @@ target_compile_options(partsim_console PRIVATE -Wall -Wextra)
 add_executable(partsim_beaker_ppm beaker_ppm.cpp)
 target_link_libraries(partsim_beaker_ppm PRIVATE partsim_core)
 target_compile_options(partsim_beaker_ppm PRIVATE -Wall -Wextra)
+
+# M4-B as an image: a beaker pouring into the next one. See spill_ppm.cpp -- a conserved count
+# cannot tell you whether the liquid leaves as a stream or as a burst.
+add_executable(partsim_spill_ppm spill_ppm.cpp)
+target_link_libraries(partsim_spill_ppm PRIVATE partsim_core)
+target_compile_options(partsim_spill_ppm PRIVATE -Wall -Wextra)

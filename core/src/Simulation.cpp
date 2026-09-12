@@ -65,6 +65,16 @@ bool Simulation::init(int mode, int particleCount, uint32_t seed, int panelRes) 
   targetWater_ = particles_.n;
   targetSand_ = 0;
   rng_.reseed(seed ^ 0x5EEDu);
+  // A reset is a reset, cumulative counters included. Found by a test that asserted totalOut
+  // against the population and read 150 for a 75-particle beaker: the queue is a member, init()
+  // rebuilt everything around it, and the previous run's spill count carried straight over.
+  //
+  // The OPEN FACE deliberately survives, because resetting a beaker is meant to refill it, not to
+  // turn it back into a sealed cube. M4-D's receiver sees totalOut restart at 0 and should treat
+  // that the way it treats a node that rebooted.
+  spill_.clear();
+  spill_.totalOut = 0;
+  spill_.dropped = 0;
   stats.particles = particles_.n;
   stats.substeps = 0;
   return true;
@@ -172,6 +182,14 @@ void Simulation::advanceTransition(float dt) {
     if (fade_ >= 1.0f) renderer_.setPalette(fadeTo_);
   }
 
+  // A vessel with a hole in it has no population TARGET: what is in it is whatever has not poured
+  // out yet. Left running, this loop sees a draining beaker as a scene mid-transition and tops it
+  // up from the top at 32 particles a step, so the count never falls at all -- and it is a second
+  // thing the open face has to be told about, after the clamp and the wall-density term.
+  //
+  // The palette crossfade above still runs: that is about colour, not about volume.
+  if (volume_.isOpen()) return;
+
   int water = 0, sand = 0;
   countMaterials(water, sand);
   int budget = kPopulationRate;
@@ -224,16 +242,83 @@ void Simulation::setRenderSet(const int* panels, int count) {
   renderSetCount_ = count;
 }
 
+// Everything that has left through the open face, removed and queued.
+//
+// Runs AFTER the solver rather than inside it, so a particle that crossed the rim spends one step
+// just outside it. That is deliberate: it is still a neighbour of the fluid it is leaving, which
+// is what makes a pour read as a connected stream instead of a row of particles winking out at
+// the lip. The predict step's velocity clamp bounds how far out it can get -- 0.4h per step, one
+// rest spacing -- so it is never far enough for coordOf's clamp into the edge cell to matter.
+void Simulation::harvestSpill() {
+  // DOWNWARD, because removeAt is swap-with-last: the element that lands on index i came from a
+  // higher index this loop has already examined, so every particle is still tested exactly once.
+  // Upward with an unconditional ++i would skip it, and the skipped particle would sit outside
+  // the box forever -- a leak that conserves the COUNT and so survives the ring test.
+  for (int i = particles_.n - 1; i >= 0; --i) {
+    if (!volume_.pastOpenFace(particles_.pos(i))) continue;
+    SpillParticle s;
+    s.pos = particles_.pos(i);
+    s.vel = particles_.vel(i);
+#if PARTSIM_ENABLE_CHROMA
+    s.cr = particles_.cr[i];
+    s.cg = particles_.cg[i];
+#endif
+    spill_.push(s);
+    particles_.removeAt(i);
+  }
+  stats.particles = particles_.n;
+}
+
+bool Simulation::injectSpill(const SpillParticle& s) {
+  const Aabb& b = volume_.box();
+  const int a = volume_.openAxis();
+  if (a < 0) return false;  // no open face: there is nowhere for an arrival to come in
+
+  // Object space on both sides, so the horizontal position survives the trip: a stream leaving
+  // one corner arrives in the corresponding corner. Only the open axis is rewritten.
+  float pos[3] = {s.pos.x, s.pos.y, s.pos.z};
+  float vel[3] = {s.vel.x, s.vel.y, s.vel.z};
+  const float lo[3] = {b.lo.x, b.lo.y, b.lo.z};
+  const float hi[3] = {b.hi.x, b.hi.y, b.hi.z};
+
+  // One rest spacing inside the rim. Deep enough that the next harvest cannot take it straight
+  // back out, shallow enough to read as entering at the top rather than materialising in the
+  // body of the liquid, and the same margin spawnOne uses for a refill.
+  const float d = kRestSpacing;
+  pos[a] = volume_.openIsHigh() ? hi[a] - d : lo[a] + d;
+  // Inward, at the speed it left with: mirroring the sign rather than imposing a constant keeps
+  // a fast pour fast and a dribble a dribble, and it cannot be outward however the particle
+  // happened to cross the plane.
+  vel[a] = volume_.openIsHigh() ? -pabs(vel[a]) : pabs(vel[a]);
+
+  // The other two axes are clamped, not trusted: a sender whose box disagrees by a hair would
+  // otherwise place an arrival outside the receiver's wall, where clampInto would snap it back
+  // with a jolt on the next step.
+  for (int k = 0; k < 3; ++k)
+    if (k != a) pos[k] = pclamp(pos[k], lo[k] + d, hi[k] - d);
+
+  if (!particles_.add(Vec3{pos[0], pos[1], pos[2]}, Vec3{vel[0], vel[1], vel[2]}, kWater))
+    return false;
+#if PARTSIM_ENABLE_CHROMA
+  const int i = particles_.n - 1;
+  particles_.cr[i] = s.cr;
+  particles_.cg[i] = s.cg;
+#endif
+  stats.particles = particles_.n;
+  return true;
+}
+
 void Simulation::fixedStep(float dt) {
   // Container acceleration is indistinguishable from gravity in the opposite direction, so a
   // shake is one vector subtraction rather than a separate force path.
-  if (fade_ < 1.0f || !populationReached()) advanceTransition(dt);
+  if (fade_ < 1.0f || (!volume_.isOpen() && !populationReached())) advanceTransition(dt);
 
   const Vec3 effective = gravity_ - jerk_;
   solver_.step(particles_, volume_, hash_, scratch_, defaultMaterials(), effective, dt);
   // Heat uses the same object-space gravity, so flames lean when the cube is tilted and get
   // pressed around when it is shaken, with no extra plumbing.
   field_.step(volume_, gravity_, jerk_, emitters_, emitterCount_, dt, rng_);
+  if (volume_.isOpen()) harvestSpill();
   jerk_ *= kJerkDecay;
   if (length2(jerk_) < 1e-4f) jerk_ = Vec3{0.0f, 0.0f, 0.0f};
 }
@@ -244,6 +329,10 @@ int Simulation::advance(float wallDt) {
   if (wallDt < 0.0f) wallDt = 0.0f;
   accumulator_ += wallDt;
 
+  // Cleared here rather than in fixedStep, so a frame that runs several substeps hands the
+  // caller everything that spilled during it. Clearing per substep would silently drop all but
+  // the last one's worth in a chain driven through advance().
+  spill_.clear();
   int n = 0;
   while (accumulator_ >= kFixedDt && n < kMaxSubsteps) {
     fixedStep(kFixedDt);

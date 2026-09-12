@@ -1040,3 +1040,108 @@ leave `stateHash()` bit-identical, and sixty after release do not.
 The latch is deliberately **not wired to anything**. There is no beaker mode to enter yet —
 `grep -ri beaker core platform` finds the tier and the PlatformIO environment and nothing else —
 and inventing the mode in order to gate it would have been item E's decision taken by item C.
+
+### D56. The open face is a flag on the volume, and the clamp moves with it **[STANDS]**
+
+Beaker mode needs one wall of the container to be absent. Two ways to do that: change the geometry
+so the box genuinely has five faces, or keep the box and mark one face as not a wall.
+
+**A flag, on `SimVolume`.** The box is the thing that says "no particle is ever outside this", so
+it is also the thing that should say where that stops being true. Changing the geometry would put
+an open-top container into `Geometry::bounds()`, which every node of a multi-node cube has to agree
+on exactly (D32), and would make the neighbour grid's dimensions depend on the mode.
+
+The clamp moved with it. `clampToBox` was a static helper in `Solver.cpp`'s anonymous namespace
+called from three places; it is now `SimVolume::clampInto`, and the three call sites are
+`v.clampInto(...)`. That is not tidying — it is the only way a **fourth** caller cannot silently
+re-close the face by reaching for the raw `Aabb`, which is exactly what `wallDensityAt` was doing
+(D57).
+
+Off by default, and the closed path is `pclamp` and nothing else, so both golden hashes are
+unchanged: `f0021217 8e143d3b` on the host, in WASM, and at the device capacities.
+
+### D57. The open face has FOUR call sites, and the brief names three **[STANDS]**
+
+The handoff says: mind all three `clampToBox` call sites. There is a fourth place the box asserts
+itself, and it is not a clamp — `Solver::wallDensityAt` adds back the fraction of a particle's
+kernel that each of the six walls hides, so that fluid does not shrink away from the glass. An open
+face hides nothing, and leaving its term in place means every particle near the rim is told there
+is half a rest density of neighbours above it that are not there. The solver resolves that by
+pushing the surface **down, away from the face the liquid is supposed to leave through**.
+
+Measured rather than argued. 1102 particles, gravity tilted `deg` from the cube's own down axis,
+900 steps, the only difference being whether the open face's term is subtracted:
+
+| deg | 95 | 112 | 129 | 146 | 163 | 180 |
+|---|---|---|---|---|---|---|
+| steps to empty, compensated | — | 395 | 232 | 163 | 126 | 100 |
+| steps to empty, phantom lid | — | 690 | 381 | 313 | 234 | 208 |
+| left at 95°, compensated | 14 | | | | | |
+| left at 95°, phantom lid | 63 | | | | | |
+
+Roughly **2× on the pour rate**, and 4.5× on what a gentle tilt leaves behind. It pours either way,
+which is precisely why this would have shipped unnoticed: the bug is not "it does not work", it is
+"it is half as fast as it should be and nothing says so".
+
+The general shape, and it is the same one as R7: **an invariant has as many enforcement points as
+the code has, not as many as the design describes.** The three clamps were the ones with the
+function name on them. The fourth was the one that mattered by 2×.
+
+### D58. An arrival enters one rest spacing inside the rim, moving in at the speed it left **[STANDS]**
+
+Three things had to be picked, and all three are visible rather than arbitrary.
+
+**Where, horizontally: exactly where it left.** `SpillParticle` carries object-space coordinates,
+not normalised ones, because every cube is the same 32-unit box — so a stream leaving one corner
+arrives in the corresponding corner and the chain reads as pouring rather than as teleporting. The
+two tangential components are clamped into the receiver's box but otherwise untouched.
+
+**How deep: one `kRestSpacing` inside the open face.** Shallower and the next harvest takes it
+straight back out, which would turn a ring into a bucket brigade carrying nothing. Deeper and it
+materialises inside the settled body, over-dense, and gets flung — the same failure `spawnOne`
+already avoids with the same margin.
+
+**How fast: inward at the speed it left with**, `-|v|` along the open axis, tangential components
+kept. Mirroring rather than imposing a constant keeps a fast pour fast and a dribble a dribble, and
+it cannot point outward however the particle happened to cross the plane.
+
+`injectSpill` returns false when the pool is full. In a closed ring that is volume that never comes
+back, so it is a return value the caller must count, the same way `SpillQueue` counts `dropped`.
+
+### D59. A vessel with a hole in it has no population target **[STANDS]**
+
+`advanceTransition` keeps the particle count at the current scene's target, adding or removing 32 a
+step. It is what makes a scene change read as a drain and refill instead of a hard reset.
+
+Against an open beaker it is a disaster, and a quiet one: a draining vessel looks exactly like a
+scene mid-transition, so the machinery **tops it back up from the top at 32 particles a step** and
+the count never falls at all. So `advanceTransition` returns early while a face is open, and
+`transitioning()` stops reporting a drained beaker as mid-transition. The palette crossfade still
+runs — that is about colour, not volume.
+
+Found through a test that was lying about something else. The sand fixture for D57 drained
+identically with the friction clamp open and shut, and the reason was this: the population loop was
+churning sand out and water in underneath the measurement, so both builds emptied and the test
+proved nothing. With the machinery silenced the same fixture separates 0 grains from 909.
+
+**A fixture that cannot fail is worse than no fixture**, because it is counted as coverage. The
+check that caught it was asserting `totalOut` against the population rather than against itself —
+1102 grains went in, 782 came out of the queue, and the missing 320 were the giveaway.
+
+### D60. The outbound queue holds one step, and a reset resets its counters **[STANDS]**
+
+`Simulation` clears its `SpillQueue` at the top of `stepFixed()` and at the top of `advance()` —
+not inside `fixedStep`. So the queue always holds exactly what crossed during the step (or the
+frame, substeps included) just run, and three callers all get what they need: a chained beaker
+reads it after each step and loses nothing; a single cube reads nothing and the clear **is** the
+"spills and does not come back" behaviour, with no discipline required of the caller; and `dropped`
+comes to mean one specific thing — more than `kMaxSpill` particles crossed in a single 1/60 s step
+— rather than "nobody drained the buffer".
+
+`totalOut` survives the clear, because M4-D's receiver counts against it as a sequence number.
+
+`init()` resets both cumulative counters, and deliberately does **not** close the open face: a
+beaker reset is a refill, not a return to a sealed cube. A receiver sees `totalOut` restart at zero
+and should treat that as it treats a node that rebooted. Found by an assertion that read 150
+spilled particles out of a 75-particle beaker — the queue is a member, `init()` rebuilt everything
+around it, and the previous run's count carried straight over.

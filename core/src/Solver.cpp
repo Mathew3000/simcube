@@ -8,13 +8,6 @@ namespace {
 // support contribute.
 constexpr int kLatticeReach = 3;  // covers h / d = 2 with room to spare
 
-inline Vec3 clampToBox(Vec3 p, const Aabb& b) {
-  // A hair inside the far edge so cell indexing never lands on the exclusive upper bound.
-  const float e = 1e-3f;
-  return Vec3{pclamp(p.x, b.lo.x, b.hi.x - e), pclamp(p.y, b.lo.y, b.hi.y - e),
-              pclamp(p.z, b.lo.z, b.hi.z - e)};
-}
-
 }  // namespace
 
 const MaterialParams* defaultMaterials() {
@@ -83,12 +76,36 @@ float Solver::wallDensity(float d) const {
   return wallLut_[q] + (wallLut_[q + 1] - wallLut_[q]) * frac;
 }
 
-float Solver::wallDensityAt(Vec3 pi, const Aabb& b, float rho0) const {
+float Solver::wallDensityAt(Vec3 pi, const SimVolume& v, float rho0) const {
+  const Aabb& b = v.box();
   // One axis-aligned wall at a time, so a corner double-counts the overlap slightly.
   // Acceptable, and erring dense in corners is the safe direction.
   float f = wallDensity(pi.x - b.lo.x) + wallDensity(b.hi.x - pi.x);
   f += wallDensity(pi.y - b.lo.y) + wallDensity(b.hi.y - pi.y);
   f += wallDensity(pi.z - b.lo.z) + wallDensity(b.hi.z - pi.z);
+  if (!v.isOpen()) return f * rho0;
+
+  // The FOURTH place the box asserts itself, and the handoff counts three. An open face hides no
+  // neighbours, so its share of the kernel has to come back off -- at the rim that share is half
+  // a rest density of phantom mass, and the solver resolves it by pushing the surface DOWN, away
+  // from the very face the liquid is supposed to leave through.
+  //
+  // Measured: 1102 particles, gravity tilted `deg` from the cube's own down axis, 900 steps.
+  //
+  //   deg                            95   112   129   146   163   180
+  //   steps to empty, compensated     -   395   232   163   126   100
+  //   steps to empty, phantom lid     -   690   381   313   234   208
+  //   left at 95 deg                 14                             63
+  //
+  // So it is worth roughly 2x on the pour rate and 4.5x on what a gentle tilt leaves behind. The
+  // pour still happens without it -- which is exactly why this would have shipped unnoticed.
+  //
+  // Subtracting the same wallDensity() term rather than restructuring the sum above keeps the
+  // closed path bit-identical. See DECISIONS.md D57.
+  const int a = v.openAxis();
+  const float lo[3] = {pi.x - b.lo.x, pi.y - b.lo.y, pi.z - b.lo.z};
+  const float hi[3] = {b.hi.x - pi.x, b.hi.y - pi.y, b.hi.z - pi.z};
+  f -= wallDensity(v.openIsHigh() ? hi[a] : lo[a]);
   return f * rho0;
 }
 
@@ -100,13 +117,12 @@ float Solver::densityAt(const Particles& p, const SimVolume& v, const SpatialHas
     if (j == i) return;
     rho += mass_ * k_.poly6(length2(p.pred(j) - pi));
   });
-  return rho + wallDensityAt(pi, v.box(), rho0);
+  return rho + wallDensityAt(pi, v, rho0);
 }
 
 void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash& h,
                             const MaterialParams* mats) {
   const int n = p.n;
-  const Aabb& b = v.box();
 
   // --- pass A+B: density and Lagrange multiplier in ONE neighbour walk -----
   // Fused deliberately. Computing density and sum-of-squared-gradients in separate passes
@@ -124,11 +140,10 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
       const SimVolume* v;
       const SpatialHash* h;
       const MaterialParams* mats;
-      const Aabb* b;
-    } ctx{this, &p, &v, &h, mats, &b};
+    } ctx{this, &p, &v, &h, mats};
     par_->forRange(n, &ctx, [](void* vp, int begin, int end) {
       Ctx& c = *(Ctx*)vp;
-      c.self->densityPass(*c.p, *c.v, *c.h, c.mats, *c.b, begin, end);
+      c.self->densityPass(*c.p, *c.v, *c.h, c.mats, begin, end);
     });
   }
 
@@ -139,7 +154,7 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
 }
 
 void Solver::densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
-                         const MaterialParams* mats, const Aabb& b, int begin, int end) {
+                         const MaterialParams* mats, int begin, int end) {
   for (int i = begin; i < end; ++i) {
     const Vec3 pi = p.pred(i);
     const float rho0 = mats[p.mat[i]].restDensityScale;
@@ -157,7 +172,7 @@ void Solver::densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
       gradI += gj;
       sumGrad2 += length2(gj);
     });
-    rho += wallDensityAt(pi, b, rho0);
+    rho += wallDensityAt(pi, v, rho0);
 
     const float C = rho / rho0 - 1.0f;
     if (C <= 0.0f) {
@@ -175,7 +190,6 @@ void Solver::densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
 void Solver::correctionPasses(Particles& p, const SimVolume& v, const SpatialHash& h,
                               const MaterialParams* mats) {
   const int n = p.n;
-  const Aabb& b = v.box();
 
   // --- pass C: positional correction --------------------------------------
   // Applied in place, i.e. Gauss-Seidel rather than the textbook Jacobi. That costs a
@@ -215,7 +229,7 @@ void Solver::correctionPasses(Particles& p, const SimVolume& v, const SpatialHas
     const float d2 = length2(dp);
     if (d2 > kMaxDeltaP * kMaxDeltaP) dp *= kMaxDeltaP * prsqrt(d2);
 
-    p.setPred(i, clampToBox(pi + dp, b));
+    p.setPred(i, v.clampInto(pi + dp));
   }
 
   // --- pass D: granular friction ------------------------------------------
@@ -267,7 +281,11 @@ void Solver::correctionPasses(Particles& p, const SimVolume& v, const SpatialHas
       // slide), kinetic at it. Half each, since j runs its own pass.
       const float limit = mu * overlap;
       const float scale = (tl <= limit) ? 1.0f : (limit / tl);
-      p.setPred(i, clampToBox(pi - tang * (0.5f * scale), b));
+      // The SECOND of the three clamp sites, and the one that only water can hide: friction is
+      // skipped for mu == 0, so a beaker of water never runs this loop and a clamp left closed
+      // here would re-imprison a spilling particle with nothing to catch it. tests/test_spill.cpp
+      // opens a face under SAND for exactly this reason.
+      p.setPred(i, v.clampInto(pi - tang * (0.5f * scale)));
     });
   }
 }
@@ -276,7 +294,6 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
                   const MaterialParams* mats, Vec3 gravity, float dt) {
   const int n = p.n;
   if (n == 0) return;
-  const Aabb& b = v.box();
 
   // --- predict -------------------------------------------------------------
   // CFL: a particle must not cross more than a fraction of the kernel radius per step, or
@@ -287,10 +304,10 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
   {
     struct Ctx {
       Particles* p;
-      const Aabb* b;
+      const SimVolume* v;
       Vec3 gravity;
       float dt, vMax, vMax2;
-    } ctx{&p, &b, gravity, dt, vMax, vMax2};
+    } ctx{&p, &v, gravity, dt, vMax, vMax2};
     par_->forRange(n, &ctx, [](void* vp, int begin, int end) {
       Ctx& c = *(Ctx*)vp;
       for (int i = begin; i < end; ++i) {
@@ -298,7 +315,7 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
         const float s2 = length2(vel);
         if (s2 > c.vMax2) vel *= c.vMax * prsqrt(s2);
         c.p->setVel(i, vel);
-        c.p->setPred(i, clampToBox(c.p->pos(i) + vel * c.dt, *c.b));
+        c.p->setPred(i, c.v->clampInto(c.p->pos(i) + vel * c.dt));
       }
     });
   }

@@ -3,6 +3,7 @@
 #include "partsim/Scene.h"
 #include "partsim/Rng.h"
 #include "partsim/Solver.h"
+#include "partsim/Spill.h"
 
 namespace partsim {
 
@@ -50,12 +51,40 @@ class Simulation {
   // than as a change of scene.
   void transitionToScene(int sceneId);
   int scene() const { return sceneId_; }
-  bool transitioning() const { return fade_ < 1.0f || !populationReached(); }
+  // An open beaker is never "transitioning" on population grounds: see advanceTransition.
+  bool transitioning() const {
+    return fade_ < 1.0f || (!volume_.isOpen() && !populationReached());
+  }
 
   // Drift between scenes on a timer, so the cube is an ambient object rather than something
   // that has to be operated.
   void setAutoCycle(bool on) { autoCycle_ = on; cycleClock_ = 0.0f; }
   bool autoCycle() const { return autoCycle_; }
+
+  // --- beaker mode: an open face, and what leaves through it -----------------------------
+  //
+  // Off by default (kOpenNone), and every line below is inert until a face is opened -- which is
+  // what keeps beaker mode a MODE rather than a change to what the shipping tiers simulate.
+  // kOpenPosY is the open top of an upright cube.
+  void setOpenFace(int f) { volume_.setOpenFace(f); }
+  int openFace() const { return volume_.openFace(); }
+
+  // What left through the open face. Cleared at the top of stepFixed() and of advance(), so it
+  // always holds exactly the particles that crossed during the step (or the frame) just run.
+  //
+  // A chained beaker reads this after each step and hands it to the next cube; a SINGLE cube
+  // reads nothing, and the clear is what makes "spills and does not come back" the default
+  // rather than something a caller has to remember. `totalOut` is cumulative regardless and is
+  // never reset, so it stays the sequence number M4-D's receiver counts against.
+  const SpillQueue& spill() const { return spill_; }
+  SpillQueue& spill() { return spill_; }
+
+  // An arrival from the cube upstream. Enters just inside the open face at the horizontal
+  // position it left, moving inward at the speed it left with -- see DECISIONS.md D58.
+  //
+  // Returns false only if the particle pool is full, which in a closed ring is volume that never
+  // comes back. Callers must count a false the way SpillQueue counts a drop.
+  bool injectSpill(const SpillParticle& s);
 
   // World-space down, rotated into object space by the object's orientation.
   void setOrientation(Quat q);
@@ -84,7 +113,7 @@ class Simulation {
   // Fixed-timestep accumulator. Returns how many physics steps ran.
   int advance(float wallDt);
   // Exactly one physics step, for tests and the golden sequence.
-  void stepFixed() { fixedStep(kFixedDt); }
+  void stepFixed() { spill_.clear(); fixedStep(kFixedDt); }
 
   // Splat everything into the accumulation buffers without resolving colour. The ESP32 has no
   // room for an RGBA copy of all six panels, so the firmware calls this and then resolves each
@@ -143,6 +172,7 @@ class Simulation {
 
  private:
   void fixedStep(float dt);
+  void harvestSpill();
   int fill(int count, uint8_t material, uint32_t seed);
   void applySceneTargets(int sceneId);
   void advanceTransition(float dt);
@@ -183,6 +213,8 @@ class Simulation {
   int renderSet_[kMaxRenderPanels] = {0};
   int renderSetCount_ = -1;
   int panelRes_ = kPanelRes;
+
+  SpillQueue spill_;
 
   Emitter emitters_[kMaxEmitters];
   int emitterCount_ = 0;

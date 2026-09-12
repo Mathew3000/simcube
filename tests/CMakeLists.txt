@@ -18,6 +18,7 @@ add_executable(partsim_tests
   test_multinode.cpp
   test_chroma.cpp
   test_spill.cpp
+  test_beaker_spill.cpp
   test_font.cpp
   test_beaker.cpp
 )

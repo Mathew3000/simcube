@@ -99,12 +99,12 @@ class Solver {
 
  private:
   float wallDensity(float d) const;
-  float wallDensityAt(Vec3 pi, const Aabb& b, float rho0) const;
+  float wallDensityAt(Vec3 pi, const SimVolume& v, float rho0) const;
   void solveIteration(Particles& p, const SimVolume& v, const SpatialHash& h,
                       const MaterialParams* mats);
   // Split out so the hazard-free half can be handed to Parallel::forRange over [begin, end).
   void densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
-                   const MaterialParams* mats, const Aabb& b, int begin, int end);
+                   const MaterialParams* mats, int begin, int end);
   void correctionPasses(Particles& p, const SimVolume& v, const SpatialHash& h,
                         const MaterialParams* mats);
 
