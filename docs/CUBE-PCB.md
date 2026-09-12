@@ -384,6 +384,93 @@ expected to matter for a hand-held object, but both are untested.
 
 ---
 
+### 6.2 What the master actually has to be — stated as requirements, not as a part
+
+The master runs the solver and nothing else: it drives no panels, so it needs **no HUB75
+peripheral, no large DMA buffer and no display clock**. That makes it the one board where a
+different vendor is a realistic option, and this section exists so a candidate can be checked
+against numbers rather than against a marketing page.
+
+**The unit is particle-steps per second.** One particle advanced by one solver step. It is
+hardware-independent, and everything the fluid does is a multiple of it:
+
+```
+required throughput = particles x substeps_per_frame x target_fps
+```
+
+Measured baseline, so the multipliers below mean something: an **ESP32-S3 at 240 MHz delivers
+5 849 particle-steps/s** (87.54 ms for 512 particles, one step, after the divide-free solver
+landed — see RESOURCES.md §5.1).
+
+| tier | `d` | representative scene | particles | needed | **vs S3** | solver working set |
+|---|---|---|---|---|---|---|
+| `lite` | 4.0 | water tank | 158 | 9 480/s | **2x** | 28 KB |
+| `cube` | 3.0 | water tank | 375 | 22 500/s | **4x** | 65 KB |
+| `beaker` | 2.5 | half-full beaker | 1 049 | 62 940/s | **11x** | 177 KB |
+| `future` | 1.0 | half-full beaker | 16 384 | 983 040/s | **168x** | 2.7 MB |
+| `max` | 0.5 | half-full beaker, 60 fps | 131 072 | 15 728 640/s | **2 689x** | 38 MB |
+
+All at two substeps per frame and 30 fps except `max`. **Note what the first two rows say: the
+cube as it ships today needs 4x an S3 to hit 30 fps, and does not have it.** That is not a
+rounding error to design around later; it is the headline requirement.
+
+Working set is solver-only — particles, neighbour cache, sort grid, heat field. It excludes the
+accumulation buffers and the DMA framebuffer, which live on the display boards.
+
+#### REQ-MCU: what a master candidate must have
+
+- **REQ-MCU-1 Single-precision hardware FPU, with hardware divide and square root.** Non-negotiable
+  and the easiest thing to get wrong, because a datasheet saying "FPU" does not imply either. The
+  ESP32-S3's FPU has neither: GCC emits calls to `__divsf3` and `sqrtf`, and the inner loop makes
+  ~260 of them per particle per step. Check by compiling `core/src/Solver.cpp` for the candidate
+  and running `nm -u` on the object — **a clean candidate shows no libm symbols.** Cortex-M7 shows
+  none; Xtensa LX7 shows both.
+- **REQ-MCU-2 The working set must fit zero-wait-state memory** — TCM, or SRAM with no flash-XIP
+  stall in the path. The solver is a scattered gather: 88 candidate reads per particle per step,
+  of which 27% are useful. Served through a small cache with a slow backing store, none of the
+  throughput figures above survive. Sizes per tier are in the table.
+- **REQ-MCU-3 Single-core throughput is what counts, today.** The solver is Gauss-Seidel — each
+  correction is applied in place and later particles see it — so extra cores currently buy
+  **nothing**. This is the one requirement that a software change could lift: the eight-colour cell
+  partitioning in DECISIONS.md P2 makes cores usable and is worth ~1.8x on any part. Until it
+  exists, judge a candidate on `clock x IPC`, not on core count.
+- **REQ-MCU-4 Deterministic scalar float.** All three targets compare a bit-identical state hash,
+  so the part must support `-ffp-contract=off` semantics — no unconditional fused multiply-add, and
+  no flush-to-zero that cannot be turned off.
+- **REQ-MCU-5** The master needs a radio for beaker-mode chaining (REQ-M-1). A part without one
+  implies a companion — for ESP32-P4 that is Espressif's own C6/C5 over SDIO. Budget the second
+  package and its pins, not just the first.
+
+#### What does NOT help, and should not be paid for
+
+Worth stating explicitly, because the specs that sell a modern MCU are mostly irrelevant here:
+
+- **NPU / TPU / "AI accelerator".** Integer or bf16 matrix-multiply hardware. This workload is
+  scalar single-precision with an irregular neighbour gather and a sequential dependency between
+  particles. None of it maps. An NPU contributes exactly zero.
+- **SIMD / vector extensions** (Helium, RVV, the S3's PIE). The gather is irregular and
+  Gauss-Seidel serialises the writes, so there is nothing to vectorise without first doing
+  REQ-MCU-3's re-colouring — and even then the gain is in parallel *particles*, not lanes.
+- **GPU or 2D blitter.** The display boards do the drawing, and their cost is a fixed ~30 ms floor
+  that no processor removes (RESOURCES.md).
+- **Large flash, PSRAM bandwidth, high core count, Ethernet, USB 3.** None are on the critical
+  path for this board.
+
+#### Sizing an aspirational part
+
+For the top of the ladder — `d` = 0.5 at 60 fps — the requirement is **~2 700x an ESP32-S3 in
+sustained scalar single-precision throughput, with 38 MB of low-latency working memory.**
+
+A useful sanity check on what that means: eight cores at 2 GHz is ~66x the S3 in clock-cores, and
+perhaps 100x once better IPC is allowed for. **That is still 27x short** — and it only counts at
+all if REQ-MCU-3 has been lifted first, since without the re-colouring the other seven cores do
+nothing.
+
+So the honest statement is that the `max` rung is **not a microcontroller target at all**. It wants
+a many-core application processor or a GPU, and it is in the ladder to keep the parameter space
+open rather than because a part is expected. The rungs a real part can reach are `lite` through
+`beaker`: **2x to 11x an ESP32-S3**, which is squarely in Cortex-M7 territory.
+
 ## 7. CUBE-DISPLAY (×3, identical)
 
 - **REQ-D-1** ESP32-S3-WROOM-1 N16R8. **No antenna requirement** — these boards never transmit.
@@ -545,7 +632,9 @@ Not a BOM — starting points, all to be confirmed for availability and second s
 
 | function | candidate | note |
 |---|---|---|
-| MCU | ESP32-S3-WROOM-1U-N16R8 | U = external antenna, master only |
+| MCU, display boards | ESP32-S3-WROOM-1-N16R8 | the HUB75 driver exists only for this family |
+| MCU, master | ESP32-S3-WROOM-1U-N16R8 | U = external antenna; **meets `lite`, not `cube`** — see §6.2 |
+| MCU, master, faster | see §13.1 | the master is the one board where another vendor is realistic |
 | IMU | LSM6DSOX | ±8 g / ±500 dps at 208 Hz |
 | PD sink | STUSB4500 | autonomous, NVM-configured, works with no firmware |
 | Charger | BQ25792 | 1–4S buck-boost, I2C, integrated ADC |
@@ -556,30 +645,66 @@ Not a BOM — starting points, all to be confirmed for availability and second s
 | HUB75 buffer | 74AHCT245 | footprint per connector, populate if needed |
 | Load switch | high-side eFuse with enable | REQ-CHG-6 |
 
+### 13.1 Master candidates, if the S3 is not enough
+
+Ranked by measured instruction count and the CPI the S3 was measured at — derivation and its
+assumptions in RESOURCES.md §5.1. **Only the relative figures are measured; the CPI of every
+non-Espressif part below is an assumption**, and it is the term that decides the ranking.
+
+| part | core | MHz | vs S3 | reaches | note |
+|---|---|---|---|---|---|
+| ESP32-S3 | Xtensa LX7 | 240 | **1.0x** | `lite` | measured; the baseline |
+| ESP32-P4 | RISC-V ×2 | 400 | ~2.3x | `lite` | no radio at all — needs a C6/C5 companion |
+| STM32H743 | Cortex-M7 | 480 | ~2.9x | `cube` | LQFP, internal flash, 4-layer |
+| STM32H7S3 | Cortex-M7 | 600 | ~3.6x | `cube` | |
+| i.MX RT1062 | Cortex-M7 | 600 | ~3.8x | `cube` | |
+| i.MX RT1176 | Cortex-M7 | 1000 | ~6.3x | `beaker` | BGA, external flash, 6+ layers |
+| *(aspirational)* | — | — | ~2 700x | `max` | not a microcontroller — §6.2 |
+
+Two practical notes that the throughput column does not carry:
+
+- **Package and layer count matter more than the last 20% of speed.** An STM32H7 in LQFP with
+  internal flash is a 4-layer board an experienced hobbyist finishes; a 0.65 mm BGA with mandatory
+  external QSPI is not the same project. The step from `cube` to `beaker` is also a step from LQFP
+  to BGA.
+- **Cortex-M7 wins here mostly on tightly-coupled memory**, not on clock (REQ-MCU-2). A part with
+  the same clock but a small cache and flash-XIP behind it will not deliver the figure in the
+  table.
+
+**None of this is a decision.** The master stays an ESP32-S3 until something forces otherwise, and
+the two software levers — the eight-colour parallelisation (~1.8x) and the render floor work — are
+worth more than one step down this table and cost no silicon.
+
 ---
 
 ## 14. Open items
 
 Ordered by how much of the design they could invalidate.
 
-1. **Panel power rating [A].** The 20 W/panel figure drives the pack size, the converter rating and
+1. **The master is 4x too slow for the tier it ships.** §6.2: `cube` needs 22 500 particle-steps/s
+   at 30 fps and an ESP32-S3 delivers 5 849. Three ways out, in order of cost: the eight-colour
+   solver parallelisation (~1.8x, no silicon, DECISIONS.md P2), the render-floor work (~30 ms of
+   the frame, also no silicon), and only then a faster master from §13.1. **This invalidates
+   nothing electrically** — the master's footprint, power and pin count are nearly the same for
+   every candidate — but it is the item most likely to change which part is on the board.
+2. **Panel power rating [A].** The 20 W/panel figure drives the pack size, the converter rating and
    the runtime requirement. Measure a real panel at full white and at the kettle scene before
    committing to cells. **If panels measure 30 W, REQ-BAT-2 fails and the pack must grow.**
-2. **Scan-logic baseline [A].** Assumed 1.5 W/panel. At the design case this is 9 W of 21.9 W — 41 %
+3. **Scan-logic baseline [A].** Assumed 1.5 W/panel. At the design case this is 9 W of 21.9 W — 41 %
    of panel power — so it matters more than its size suggests. Measure with all LEDs off.
-3. **Thermal.** REQ-THM-1 is a genuine unknown; ~10 W inside 1 L may need more than passive vents.
-4. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether one display
+4. **Thermal.** REQ-THM-1 is a genuine unknown; ~10 W inside 1 L may need more than passive vents.
+5. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether one display
    board can drive all six faces. Requires the row-walking blit first — the per-pixel path does
    147 456 scattered PSRAM accesses per frame at six faces and cannot work. RESOURCES.md §2.
-5. **ESP-NOW versus panel EMF.** Putting a radio in this object was a reopened decision. The
+6. **ESP-NOW versus panel EMF.** Putting a radio in this object was a reopened decision. The
    master drives no panels so there is no DMA timing to disturb, but "a radio on a non-display node
    cannot disturb a display node" is reasonable and **unverified**. Measure display refresh with
    the radio transmitting.
-6. **Refresh rate at 128×64.** `S3_LCD_DIV_NUM=10` with `HZ_16M` measured 141 Hz on a 192×32 chain
+7. **Refresh rate at 128×64.** `S3_LCD_DIV_NUM=10` with `HZ_16M` measured 141 Hz on a 192×32 chain
    (6144 px). A 128×64 chain is 8192 px, so expect ~106 Hz and possibly a bump to `HZ_20M`.
-7. **Blit cost.** ~8192 `drawPixelRGB888` calls per node per frame at ~130 cycles each ≈ 4.4 ms,
+8. **Blit cost.** ~8192 `drawPixelRGB888` calls per node per frame at ~130 cycles each ≈ 4.4 ms,
    about 13 % of a 30 fps frame. Affordable; `ChainMap::row` exists so a direct DMA-buffer row
    write can replace it without disturbing the mapping.
-8. **Cell format.** 18650 at 65 mm fits the 98 mm interior with margin. Confirm holder footprint
+9. **Cell format.** 18650 at 65 mm fits the 98 mm interior with margin. Confirm holder footprint
    against the real frame, and that a single 80x80 mm board carrying four holders, a 12 A buck and
    two HUB75 headers still leaves room for the panels' own connectors.
