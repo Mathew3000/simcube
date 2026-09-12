@@ -64,6 +64,12 @@
 #ifdef PARTSIM_TIER_BEAKER
 #define PARTSIM_ENABLE_SAND 0
 #define PARTSIM_ENABLE_HEAT 0
+// Dye is the point of this tier, not an option on it: a beaker whose liquid has no colour cannot
+// mix, and the orientation gate cannot draw a RED arrow -- with sand and heat compiled out there is
+// exactly one accumulation channel and one ramp, so every overlay texel resolves to the same
+// colour and the arrows come out white. Measured by M4-C, which asserted both cases rather than
+// noting the limitation.
+#define PARTSIM_ENABLE_CHROMA 1
 #define PARTSIM_REST_SPACING 2.5f
 // 60 Hz, NOT the 30 Hz this tier was first written with.
 //
