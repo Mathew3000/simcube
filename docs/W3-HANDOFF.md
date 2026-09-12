@@ -2,8 +2,9 @@
 
 > **DONE.** Kept as the record of what the work was handed and what it was measured against — the
 > baseline benchmark in §4 in particular, which the refactor reproduced column for column. The
-> outcome is in `ROADMAP.md` W3 and `DECISIONS.md` D42. Two things below are now stale by design:
-> `main.cpp` is 333 lines rather than 903, and `Role.{h,cpp}` and `FrameLink.h` have moved to
+> outcome is in [`W3-FINDINGS.md`](W3-FINDINGS.md), with the summary in `ROADMAP.md` W3 and the
+> decision record in `DECISIONS.md` D42. Two things below are now stale by design:
+> `main.cpp` is 332 lines rather than 903, and `Role.{h,cpp}` and `FrameLink.h` have moved to
 > `platform/app` (the strap-pin half is `platform/esp32/src/RoleStraps.{h,cpp}`).
 
 **You are picking this up cold.** Everything needed is here or linked from here. Read §1–§3 before

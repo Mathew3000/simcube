@@ -86,7 +86,7 @@ Low risk, immediate memory payoff, no physics involvement.
 ## W3. Platform HAL — **DONE**
 
 `platform/esp32/src/main.cpp` was 903 lines with `Serial`, `Wire`, FreeRTOS and the HUB75 library
-inline. It is now 333, and what remains is bring-up and scheduling: constructing drivers, and
+inline. It is now 332, and what remains is bring-up and scheduling: constructing drivers, and
 deciding when a frame runs.
 
 Everything else moved to `platform/app` as `partsim::app::App` — the role logic, the IMU ring, the
@@ -99,7 +99,8 @@ hardware through five interfaces (`Console`, `Clock`, `Display`, `MotionSensor`,
 a HUB75 DMA driver for a new MCU family is 1–2 weeks and remains explicitly **out of scope**;
 display nodes stay ESP32-S3.
 
-**What the work found.**
+**What the work found.** In full in [`W3-FINDINGS.md`](W3-FINDINGS.md) — including a 12 KB saving
+that sounded obvious and was not there. The three worth carrying:
 
 *A HAL with one implementation is a rename, not a seam.* So the host build is not a bonus, it is
 the check: `platform/host/console_main.cpp` is a ~120-line second platform, and the `app_golden`

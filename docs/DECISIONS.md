@@ -542,7 +542,7 @@ project believed before hardware arrived.
 
 ### D42. The application layer is a library, and the host is its second platform **[STANDS]**
 
-`main.cpp` was 903 lines with `Serial`, `Wire`, FreeRTOS and HUB75 inline. It is now 333 — drivers
+`main.cpp` was 903 lines with `Serial`, `Wire`, FreeRTOS and HUB75 inline. It is now 332 — drivers
 constructed, tasks started — and everything else is `partsim::app::App` in `platform/app`, behind
 `Console`, `Clock`, `Display`, `MotionSensor`, `FrameLink` and `SystemHooks`.
 
@@ -576,7 +576,8 @@ physics with no board attached.
 Cost, measured rather than asserted: +80 B of SRAM on `cube`, `+112` on `master`, `+832` on
 `display` — vtables, line buffers, and members a class can no longer have dead-stripped. The
 benchmark did not move at all; every column reproduced to the hundredth of a millisecond on the
-same board. See `ROADMAP.md` W3 for the full table.
+same board. Full write-up, including the 12 KB saving that turned out not to exist, in
+`W3-FINDINGS.md`; the memory table is in `ROADMAP.md` W3.
 
 ---
 
