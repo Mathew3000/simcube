@@ -25,7 +25,7 @@ Read in this order:
 | [`ROADMAP.md`](ROADMAP.md) | the capability ladder and the measured baselines |
 | [`RESOURCES.md`](RESOURCES.md) | per-role budget and every hardware measurement |
 
-The house rule, stated once: **this project has been wrong six times by asserting a number instead
+The house rule, stated once: **this project has been wrong seven times by asserting a number instead
 of measuring one.** A claim in a commit message here is expected to carry the measurement that
 settled it.
 
