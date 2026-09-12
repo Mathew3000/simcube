@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "partsim/app/MotionSensor.h"
+
 // Minimal LSM6DSOX driver: raw register reads over I2C, no floating point anywhere.
 //
 // Deliberately not Adafruit_LSM6DS. Two reasons, and the second is the real one:
@@ -17,12 +19,12 @@
 // The scale factors are therefore explicit here rather than buried in a vendor driver, which
 // also means the +-8g range the plan calls for is visible and checkable: a hand-shaken cube
 // clips a +-2g part, and it clips exactly during the interaction that matters.
-class Lsm6dsox {
+class Lsm6dsox final : public partsim::app::MotionSensor {
  public:
-  struct Raw {
-    int16_t gx, gy, gz;  // gyro, LSB
-    int16_t ax, ay, az;  // accel, LSB
-  };
+  // The interface's sample type, not a second one. Two structurally identical structs with
+  // the fields in the same order is exactly the kind of duplicate that stays correct until
+  // somebody reorders one of them.
+  using Raw = partsim::app::ImuSample;
 
   // Configures 208 Hz on both sensors at +-8 g / +-500 dps. Returns false if WHO_AM_I is wrong,
   // which is the one failure worth distinguishing: it means the wiring or the address, not the
@@ -30,12 +32,15 @@ class Lsm6dsox {
   bool begin(int sdaPin, int sclPin, uint32_t hz);
 
   // True when a fresh sample of both accel and gyro is waiting.
-  bool ready();
+  bool ready() override;
   // One 12-byte burst from OUTX_L_G: gyro then accel, in one transaction.
-  bool read(Raw& out);
+  bool read(Raw& out) override;
 
-  uint8_t whoAmI() const { return who_; }
-  bool present() const { return present_; }
+  uint8_t whoAmI() const override { return who_; }
+  bool present() const override { return present_; }
+
+  float accelScaleG() const override { return kAccelScaleG; }
+  float gyroScaleRad() const override { return kGyroScaleRad; }
 
   // LSB -> physical units. Constants from the datasheet for the ranges configured above.
   //   accel: +-8 g   -> 0.244 mg/LSB

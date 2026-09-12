@@ -83,21 +83,50 @@ Low risk, immediate memory payoff, no physics involvement.
 
 ---
 
-## W3. Platform HAL · ~3–4 d
+## W3. Platform HAL — **DONE**
 
-`platform/esp32/src/main.cpp` is 901 lines with `Serial`, `Wire`, FreeRTOS and the HUB75 library
-inline. The interfaces mostly exist already — `PanelDriver`, `Lsm6dsox`, `FrameLink` — the gap is
-that the application logic is tangled with them.
+`platform/esp32/src/main.cpp` was 903 lines with `Serial`, `Wire`, FreeRTOS and the HUB75 library
+inline. It is now 333, and what remains is bring-up and scheduling: constructing drivers, and
+deciding when a frame runs.
 
-Extract a platform-neutral `App` taking those interfaces plus a clock and a console, leaving each
-platform a thin `main()`.
+Everything else moved to `platform/app` as `partsim::app::App` — the role logic, the IMU ring, the
+console, the benchmark, the determinism sequence and the per-frame body of every task. It talks to
+hardware through five interfaces (`Console`, `Clock`, `Display`, `MotionSensor`, `FrameLink`) plus
+`SystemHooks`, and it knows nothing about any scheduler.
 
 **Why it matters beyond tidiness:** the master drives no panels, so a non-ESP solver board needs
-**no HUB75 driver at all**. With the HAL in place, adding an STM32/NXP master is ~3–4 d. Without
-it, the app logic has to be rewritten per platform.
-
-Writing a HUB75 DMA driver for a new MCU family is 1–2 weeks and is explicitly **out of scope** —
+**no HUB75 driver at all** — it satisfies `Display` with `NullDisplay`, which is nothing. Writing
+a HUB75 DMA driver for a new MCU family is 1–2 weeks and remains explicitly **out of scope**;
 display nodes stay ESP32-S3.
+
+**What the work found.**
+
+*A HAL with one implementation is a rename, not a seam.* So the host build is not a bonus, it is
+the check: `platform/host/console_main.cpp` is a ~120-line second platform, and the `app_golden`
+ctest drives the application layer's own `g` command there and compares the state hash against
+`scripts/golden_hash.txt`. Had the extraction reached the physics, that test would say so without
+a board attached.
+
+*The refactor is free on the device and costs 80–832 B of SRAM.* Measured, per environment, before
+and after:
+
+| env | before | after | delta |
+|---|---|---|---|
+| `cube`, `cube-fast`, `panel` | 171,660 | 171,740 | +80 |
+| `lite` | 143,580 | 143,660 | +80 |
+| `qemu` | 171,616 | 171,696 | +80 |
+| `beaker` | 172,176 | 172,288 | +112 |
+| `master` | 192,064 | 192,176 | +112 |
+| `display` | 115,928 | 116,760 | +832 |
+
+Vtables, two 64-byte line buffers and members that can no longer be dead-stripped because a class
+holds them. Against a 230 KB budget this is noise, but it is the wrong direction and it is written
+down rather than rounded to zero.
+
+*The benchmark did not move at all*, which was the actual worry — `splat`, `resolve` and `blit`
+especially, since a change there would mean the refactor had altered the render path. Every column
+reproduced to the hundredth of a millisecond on the same board (see the table in
+`docs/W3-HANDOFF.md` §4).
 
 ---
 
@@ -143,9 +172,10 @@ runs".
 
 ## Order
 
-W1 → W2 → W4 → W3. **W1, W2 and W4 are done and committed**; W3 is the remaining item.
+W1 → W2 → W4 → W3. **All four are done and committed.**
 
-W3 was left until last deliberately and is genuinely the largest piece: it rewrites the structure
-of a 901-line file that has no test of its own beyond "the firmware boots". It should be started
-fresh rather than tacked onto a session that has already moved the physics, the renderer, the
-config surface and eleven test fixtures.
+W3 was left until last deliberately and was genuinely the largest piece: it rewrote the structure
+of a 903-line file that had no test of its own beyond "the firmware boots". It got a fresh session
+rather than being tacked onto one that had already moved the physics, the renderer, the config
+surface and eleven test fixtures — and it now has a test of its own, which is the part of it that
+outlasts the refactor.

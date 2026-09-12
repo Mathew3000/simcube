@@ -564,10 +564,14 @@ core/                        portable, no platform headers, no libm transcendent
   SimFrame.{h,cpp}           wire format
   ChainMap.{h,cpp}           face -> HUB75 chain position, with rotation and mirroring
 
+platform/app/                App.{h,cpp} -- the firmware minus the hardware and the scheduler
+                             Console, Clock, Display, MotionSensor, FrameLink, Role
 platform/host/               golden.cpp, bench.cpp, ppm_dump.cpp, memreport.cpp, dutyreport.cpp
+                             console_main.cpp -- platform/app on a second platform
 platform/wasm/               bindings.cpp + web/ (three.js cube, multi-node preview)
-platform/esp32/              main.cpp, Pins.h, Role.{h,cpp}, FrameLink, SpiFrameLink, platformio.ini
-tests/                       153 cases; 6 ctest entries by default, 7 with the opt-in QEMU check
+platform/esp32/              main.cpp (bring-up + scheduling), Pins.h, RoleStraps.{h,cpp},
+                             PanelDriver, Lsm6dsox, SpiFrameLink, platformio.ini
+tests/                       153 cases; 7 ctest entries by default, 8 with the opt-in QEMU check
 scripts/                     build, budget, determinism and QEMU checks
 ```
 

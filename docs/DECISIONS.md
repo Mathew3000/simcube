@@ -540,6 +540,44 @@ It cannot verify the display (no LCD_CAM/GDMA model), the IMU, or PSRAM bandwidt
 now do, within ~30%, once corrected by the factors in R2 — which is the opposite of what this
 project believed before hardware arrived.
 
+### D42. The application layer is a library, and the host is its second platform **[STANDS]**
+
+`main.cpp` was 903 lines with `Serial`, `Wire`, FreeRTOS and HUB75 inline. It is now 333 — drivers
+constructed, tasks started — and everything else is `partsim::app::App` in `platform/app`, behind
+`Console`, `Clock`, `Display`, `MotionSensor`, `FrameLink` and `SystemHooks`.
+
+Three choices inside that are worth recording, because each had an obvious alternative:
+
+**App owns a frame; the platform owns when a frame runs.** Every task in `main.cpp` is now a
+period, a deadline and one call. The deadline handling deliberately did *not* move: `vTaskDelayUntil`
+returns immediately once the deadline has passed, so a late task stops yielding and the console
+dies (F-series finding, still live). The fix for that is specific to FreeRTOS ticks and does not
+generalise, so it stays platform-side — now in one `frameYield` rather than copied into three tasks.
+
+**A platform that lacks a device passes a Null implementation, never a null pointer.** The master
+role, the QEMU environment and the single-panel build each used to carry their own `#if` around the
+same call sites. `PanelDriver` was already guarded on its DMA pointer, so it can be handed over
+unconditionally and simply does nothing — which is how the `#if !PARTSIM_QEMU` around every
+`present()` disappeared without a behaviour change.
+
+**Suspending the step task is part of the interface, not an implementation detail.** `SystemHooks::suspendSim`
+is documented as load-bearing where it is declared, because the mistake it prevents is not obvious
+from the call site: `runGolden`/`runBench` call `Simulation::init`, which rebuilds the tables the
+higher-priority step task is drawing from, and *pausing is not sufficient* — that task calls
+`accumulate()` every frame regardless of the pause flag. Dropping it reproduces a `LoadProhibited`
+inside `Renderer::clear()`.
+
+**The host build is the check, not a convenience.** A HAL with one implementation is a rename: the
+coupling stays and nobody finds out until the port. So `platform/host/console_main.cpp` is a real
+second platform in ~120 lines, and the `app_golden` ctest runs the application layer's own `g`
+command there against `scripts/golden_hash.txt`. It would catch an extraction that reached the
+physics with no board attached.
+
+Cost, measured rather than asserted: +80 B of SRAM on `cube`, `+112` on `master`, `+832` on
+`display` — vtables, line buffers, and members a class can no longer have dead-stripped. The
+benchmark did not move at all; every column reproduced to the hundredth of a millisecond on the
+same board. See `ROADMAP.md` W3 for the full table.
+
 ---
 
 ## 13. User decisions on the physical build

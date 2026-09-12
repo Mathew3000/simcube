@@ -2,6 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace partsim {
+namespace app {
+
 // The frame transport, behind an interface.
 //
 // SimFrame already produces and consumes bytes without knowing how they travel, and three
@@ -52,3 +55,6 @@ class NullFrameLink final : public FrameLink {
  private:
   uint32_t sent_ = 0;
 };
+
+}  // namespace app
+}  // namespace partsim

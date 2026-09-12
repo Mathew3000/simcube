@@ -1,5 +1,11 @@
 # W3 — Platform HAL: session brief
 
+> **DONE.** Kept as the record of what the work was handed and what it was measured against — the
+> baseline benchmark in §4 in particular, which the refactor reproduced column for column. The
+> outcome is in `ROADMAP.md` W3 and `DECISIONS.md` D42. Two things below are now stale by design:
+> `main.cpp` is 333 lines rather than 903, and `Role.{h,cpp}` and `FrameLink.h` have moved to
+> `platform/app` (the strap-pin half is `platform/esp32/src/RoleStraps.{h,cpp}`).
+
 **You are picking this up cold.** Everything needed is here or linked from here. Read §1–§3 before
 touching anything; §7 is the list of traps that have already cost time once.
 

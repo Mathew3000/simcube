@@ -1,5 +1,5 @@
 #pragma once
-#include "FrameLink.h"
+#include "partsim/app/FrameLink.h"
 #include "partsim/SimFrame.h"
 
 // SPI carrier for SimFrame payloads. Master is the host, display nodes are devices.
@@ -17,7 +17,7 @@
 // contention current-limited and harmless. See docs/CUBE-PCB.md REQ-SPI-6. If that resistor is
 // absent, set kBroadcast = false below and the master will send three separate transactions instead
 // -- correct, and 75% of the 20 MHz budget rather than 25%.
-class SpiMasterLink final : public FrameLink {
+class SpiMasterLink final : public partsim::app::FrameLink {
  public:
   static constexpr bool kBroadcast = true;
 
@@ -36,7 +36,7 @@ class SpiMasterLink final : public FrameLink {
   uint32_t errors_ = 0;
 };
 
-class SpiDisplayLink final : public FrameLink {
+class SpiDisplayLink final : public partsim::app::FrameLink {
  public:
   bool begin(int sck, int mosi, int miso, int cs);
   bool send(const uint8_t*, int) override { return false; }  // a display node never sends frames

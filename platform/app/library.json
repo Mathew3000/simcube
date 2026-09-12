@@ -1,0 +1,23 @@
+{
+  "name": "partsim_app",
+  "version": "0.1.0",
+  "description": "Platform-neutral application layer: role logic, IMU pumping, console, benchmark and the per-frame body of each task. Talks to hardware only through Console/Clock/Display/MotionSensor/FrameLink, and knows nothing about any scheduler.",
+  "keywords": ["simulation", "hal", "console", "led", "hub75"],
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": [{ "name": "partsim_core" }],
+  "export": {
+    "include": ["include/**", "src/**", "library.json"]
+  },
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include",
+    "flags": [
+      "-ffp-contract=off",
+      "-fno-math-errno",
+      "-Wdouble-promotion",
+      "-Wfloat-conversion"
+    ]
+  }
+}

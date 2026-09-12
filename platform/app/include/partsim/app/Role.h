@@ -1,6 +1,9 @@
 #pragma once
 #include <cstdint>
 
+namespace partsim {
+namespace app {
+
 // What this board is, read from strapping pins at boot.
 //
 // Every board runs the same image and the role is a fact about the wiring -- the same principle as
@@ -32,6 +35,11 @@ struct RoleFaces {
 
 const char* roleName(Role r);
 bool roleDrivesPanels(Role r);
-// Reads the two strap pins. Configures the pull-ups itself.
-Role readRole(int pinA, int pinB);
 RoleFaces facesFor(Role r);
+
+// Reading the STRAP PINS is the platform's half of this and lives with it -- see
+// platform/esp32/src/RoleStraps.h. What a role means, and which faces it owns, is a fact about
+// the cube rather than about any MCU, so it is here.
+
+}  // namespace app
+}  // namespace partsim

@@ -478,16 +478,22 @@ core/                    portable C++17 — no platform deps, no malloc after in
                          MotionSource  — IMU fusion, testable without an IMU
                          ChainMap      — cube face → HUB75 chain pixel
   src/
+platform/app/            App — the firmware minus the hardware and minus the scheduler
+  include/partsim/app/   Console Clock Display MotionSensor FrameLink Platform Role
+  src/                   App.cpp (roles, IMU ring, console, benchmark, golden sequence)
 platform/host/           bench.cpp ppm_dump.cpp golden.cpp memreport.cpp
+                         console_main.cpp — platform/app on a second platform, which is
+                         what keeps the HAL a seam rather than a rename
 platform/wasm/           bindings.cpp (C ABI)
   web/                   index.html (3D cube) panels.html orient.html cubeview.js
   web/vendor/            pinned three.js r170 + OrbitControls (MIT, committed on purpose)
 platform/esp32/          platformio.ini
-  src/                   main.cpp (tasks + console) PanelDriver Lsm6dsox Pins.h
+  src/                   main.cpp (bring-up + scheduling only) PanelDriver Lsm6dsox
+                         RoleStraps SpiFrameLink Pins.h
 tests/                   hand-rolled harness (check.h) + test_*.cpp
 scripts/                 build_wasm.sh build_esp32.sh serve.sh check_determinism.mjs
                          check_no_libm.sh check_wasm.sh check_golden.sh
-                         check_esp32_budget.sh check_esp32_build.sh
+                         check_esp32_budget.sh check_esp32_build.sh check_app_golden.sh
                          golden_hash.txt golden_hash_esp32.txt
 ```
 

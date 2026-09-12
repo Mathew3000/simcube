@@ -1,18 +1,8 @@
-#include "Role.h"
+#include "RoleStraps.h"
 
 #include <Arduino.h>
 
-const char* roleName(Role r) {
-  switch (r) {
-    case Role::Display0: return "display0 (faces 0,2)";
-    case Role::Display1: return "display1 (faces 1,5)";
-    case Role::Display2: return "display2 (faces 3,4)";
-    case Role::Master: return "master (physics, no panels)";
-  }
-  return "?";
-}
-
-bool roleDrivesPanels(Role r) { return r != Role::Master; }
+using partsim::app::Role;
 
 Role readRole(int pinA, int pinB) {
   pinMode(pinA, INPUT_PULLUP);
@@ -35,14 +25,4 @@ Role readRole(int pinA, int pinB) {
   if (r == Role::Master) return Role::Display0;
 #endif
   return r;
-}
-
-RoleFaces facesFor(Role r) {
-  switch (r) {
-    case Role::Display0: return RoleFaces{{0, 2}, 2};
-    case Role::Display1: return RoleFaces{{1, 5}, 2};
-    case Role::Display2: return RoleFaces{{3, 4}, 2};
-    case Role::Master: return RoleFaces{{0, 0}, 0};
-  }
-  return RoleFaces{{0, 0}, 0};
 }

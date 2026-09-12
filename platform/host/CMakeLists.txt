@@ -17,3 +17,9 @@ target_compile_options(partsim_memreport PRIVATE -Wall -Wextra)
 add_executable(partsim_golden golden.cpp)
 target_link_libraries(partsim_golden PRIVATE partsim_core)
 target_compile_options(partsim_golden PRIVATE -Wall -Wextra)
+
+# The application layer on a second platform. See console_main.cpp for why this is the proof that
+# the HAL extraction is real rather than a rename.
+add_executable(partsim_console console_main.cpp)
+target_link_libraries(partsim_console PRIVATE partsim_app)
+target_compile_options(partsim_console PRIVATE -Wall -Wextra)

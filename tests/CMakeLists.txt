@@ -63,3 +63,10 @@ add_test(NAME golden_hash_current
          COMMAND ${CMAKE_COMMAND} -E env bash
                  ${CMAKE_SOURCE_DIR}/scripts/check_golden.sh
                  $<TARGET_FILE:partsim_golden> ${CMAKE_SOURCE_DIR}/scripts/golden_hash.txt)
+
+# The platform HAL: the application layer must run, and produce the same physics, on a platform
+# that is not the device. See scripts/check_app_golden.sh and platform/host/console_main.cpp.
+add_test(NAME app_golden
+         COMMAND ${CMAKE_COMMAND} -E env bash
+                 ${CMAKE_SOURCE_DIR}/scripts/check_app_golden.sh
+                 $<TARGET_FILE:partsim_console> ${CMAKE_SOURCE_DIR}/scripts/golden_hash.txt)

@@ -1,6 +1,5 @@
 #pragma once
-#include "partsim/ChainMap.h"
-#include "partsim/Renderer.h"
+#include "partsim/app/Display.h"
 
 class MatrixPanel_I2S_DMA;
 
@@ -9,7 +8,10 @@ class MatrixPanel_I2S_DMA;
 // The interesting part is what is NOT here: no framebuffer of its own beyond one face's worth of
 // staging. Six panels of RGBA is 24KB, which at this budget is the difference between fitting
 // internal SRAM and not, so faces are resolved and pushed one at a time.
-class PanelDriver {
+// Implements partsim::app::Display -- the interface was lifted from this class rather than
+// designed beside it, so a board that drives no panels can satisfy it with NullDisplay and a
+// non-ESP solver board needs no HUB75 code at all.
+class PanelDriver final : public partsim::app::Display {
  public:
   // Panel size comes from the geometry, never from constants here -- the same rule the browser
   // frontend follows, and for the same reason: the physics and the display must not be able to
@@ -26,23 +28,23 @@ class PanelDriver {
   // Resolves each face out of the renderer's accumulation buffers and pushes it to the chain,
   // then flips the DMA back buffer so a whole frame appears at once. Partial frames on an LED
   // panel read as tearing, which on a cube looks like the fluid breaking apart.
-  void present(const partsim::Renderer& r, const partsim::Geometry& g);
+  void present(const partsim::Renderer& r, const partsim::Geometry& g) override;
 
   // A calibration pattern: each face a distinct hue, with a marker at renderer texel (1,1) and
   // arms of 3 along +x and 5 along +y. That is enough to read off each panel's rotation and
   // mirror by eye, type the correction into the `mount` console command and see it applied --
   // rather than reflashing once per guess.
-  void testPattern(const partsim::Geometry& g);
+  void testPattern(const partsim::Geometry& g) override;
 
-  void setBrightness(uint8_t b);
+  void setBrightness(uint8_t b) override;
   void clear();
 
-  partsim::ChainMap& chain() { return chain_; }
+  partsim::ChainMap& chain() override { return chain_; }
   const partsim::ChainMap& chain() const { return chain_; }
-  bool ready() const { return dma_ != nullptr; }
+  bool ready() const override { return dma_ != nullptr; }
   // Whether every face maps to horizontal runs, i.e. whether the fast blit path is available
   // for all of them. Reported at boot because it is a property of the mount table, not the code.
-  bool allRunsHorizontal(const partsim::Geometry& g) const;
+  bool allRunsHorizontal(const partsim::Geometry& g) const override;
 
  private:
   void blitFace(int face, int w, int h);
