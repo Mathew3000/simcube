@@ -68,14 +68,19 @@ class Renderer {
   // for a second full copy of the panels can resolve one face at a time into its own buffer.
   // This is the ESP32 path; render() below is this plus the resolve loop.
   void accumulate(ParticleView p, HeatView f, const Geometry& g);
-  void accumulate(const Particles& p, const FieldGrid& f, const Geometry& g) {
+  // Templated on the field so it accepts a FieldGrid or the no-heat stand-in Simulation
+  // substitutes when PARTSIM_ENABLE_HEAT is 0. Anything exposing view() works, which is the
+  // point -- the alternative was every call site naming the view explicitly.
+  template <class F>
+  void accumulate(const Particles& p, const F& f, const Geometry& g) {
     accumulate(p.view(), f.view(), g);
   }
 
 #if PARTSIM_INTERNAL_PIXELS
   // clear -> splat particles -> splat heat -> resolve every driven panel into the RGBA buffers.
   void render(ParticleView p, HeatView f, const Geometry& g);
-  void render(const Particles& p, const FieldGrid& f, const Geometry& g) {
+  template <class F>
+  void render(const Particles& p, const F& f, const Geometry& g) {
     render(p.view(), f.view(), g);
   }
 #endif

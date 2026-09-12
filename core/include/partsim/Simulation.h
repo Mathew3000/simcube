@@ -92,7 +92,9 @@ class Simulation {
   // the browser cannot drift apart visually.
   void accumulate() {
     renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
-    renderer_.accumulate(particles_, field_, geometry_);
+    // Views explicitly, not the container overload: field_ is a FieldGrid or the
+    // no-heat stand-in, and both expose view().
+    renderer_.accumulate(particles_.view(), field_.view(), geometry_);
   }
 
 #if PARTSIM_INTERNAL_PIXELS
@@ -103,14 +105,16 @@ class Simulation {
   // nothing: one multiply-add per particle, inside a loop that already reads velocity.
   void render() {
     renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
-    renderer_.render(particles_, field_, geometry_);
+    renderer_.render(particles_.view(), field_.view(), geometry_);
   }
 #endif
 
   void setInterpolate(bool on) { interpolate_ = on; }
   bool interpolate() const { return interpolate_; }
 
-  const FieldGrid& field() const { return field_; }
+  // Deduced, because the member is a FieldGrid or the no-heat stand-in and the alias naming
+  // them is declared below. Both expose view(), empty(), cellCount() and at().
+  const auto& field() const { return field_; }
 
   const Geometry& geometry() const { return geometry_; }
   const SimVolume& volume() const { return volume_; }
@@ -147,7 +151,27 @@ class Simulation {
   Particles particles_;
   SpatialHash hash_;
   Solver solver_;
-  FieldGrid field_;
+#if PARTSIM_ENABLE_HEAT
+  using HeatField = FieldGrid;
+  HeatField field_;
+#else
+  // A stand-in so field() keeps its signature and callers need no guard. HeatView::empty is true,
+  // so every consumer -- splatField, SimFrame, the browser -- skips the whole pass.
+  struct NoField {
+    bool init(const SimVolume&) { return true; }
+    void clear() {}
+    void step(const SimVolume&, Vec3, Vec3, const Emitter*, int, float, Rng&) {}
+    bool empty() const { return true; }
+    int cellCount() const { return 0; }
+    IVec3 dim() const { return IVec3{0, 0, 0}; }
+    float cellSize() const { return 0.0f; }
+    uint8_t at(int) const { return 0; }
+    uint8_t atCoord(int, int, int) const { return 0; }
+    HeatView view() const { return HeatView{nullptr, IVec3{0, 0, 0}, Vec3{0, 0, 0}, 0.0f, true}; }
+  };
+  using HeatField = NoField;
+  HeatField field_;
+#endif
   Renderer renderer_;
   float scratch_[kMaxParticles];
 

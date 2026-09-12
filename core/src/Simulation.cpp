@@ -76,6 +76,13 @@ bool Simulation::initScene(int mode, int sceneId, uint32_t seed, int panelRes) {
   return true;
 }
 
+// In a water-only build a scene's sand becomes water, so the volume it describes is preserved.
+#if PARTSIM_ENABLE_SAND
+constexpr int kDisabledSandAsWater = 0;
+#else
+constexpr int kDisabledSandAsWater = 1;
+#endif
+
 void Simulation::applySceneTargets(int sceneId) {
   sceneId_ = sceneId < 0 ? 0 : (sceneId >= sceneCount() ? sceneCount() - 1 : sceneId);
   const SceneDesc& sc = sceneAt(sceneId_);
@@ -83,12 +90,25 @@ void Simulation::applySceneTargets(int sceneId) {
   // A slab tolerates a far smaller share of its nominal capacity than a cube does; overfilling
   // leaves the fluid permanently over-compressed and it never settles.
   const int ceiling = (geometry_.count() == 1) ? capacity() / 4 : (capacity() * 9) / 10;
+#if PARTSIM_ENABLE_SAND
   targetSand_ = imin(particlesForFill(sc.sandCount), ceiling);
-  targetWater_ = imin(particlesForFill(sc.waterCount), ceiling - targetSand_);
+#else
+  // A water-only build turns a sand scene's sand into WATER rather than dropping it, so "sand
+  // pile" is still a tank of the right volume instead of an empty box. sceneIsBuildable() below
+  // is what stops such a scene being offered in the first place; this only covers a caller that
+  // asks for one by index anyway.
+  targetSand_ = 0;
+#endif
+  targetWater_ = imin(particlesForFill(sc.waterCount + kDisabledSandAsWater * sc.sandCount),
+                      ceiling - targetSand_);
   if (targetWater_ < 0) targetWater_ = 0;
 
+#if PARTSIM_ENABLE_HEAT
   emitterCount_ = imin(sc.emitterCount, kMaxEmitters);
   for (int i = 0; i < emitterCount_; ++i) emitters_[i] = sc.emitters[i];
+#else
+  emitterCount_ = 0;
+#endif
   cycleClock_ = 0.0f;
 }
 

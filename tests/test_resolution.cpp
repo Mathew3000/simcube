@@ -141,17 +141,24 @@ TEST(resolution_simulation_runs_at_either_panel_size) {
     for (int i = 0; i < 200; ++i) g_rsim.stepFixed();
     g_rsim.render();
 
-    // Something is actually lit on every face -- the check that catches a resolution that builds
-    // but renders nothing.
+    // Something is actually lit -- the check that catches a resolution that builds but renders
+    // nothing.
+    //
+    // How many faces is a function of the build. With fire, the plume reaches the ceiling and all
+    // six light. Without it the water pools on the floor and the TOP face is legitimately dark,
+    // which is the same 5-of-6 that sim_render_produces_lit_panels asserts. Requiring six here was
+    // relying on the flame without saying so.
+    int lit = 0;
     for (int k = 0; k < 6; ++k) {
       const uint8_t* px = g_rsim.renderer().panelPixels(k);
       CHECK(px != nullptr);
       long lum = 0;
       for (int t = 0; t < res * res; ++t) lum += px[t * 4] + px[t * 4 + 1] + px[t * 4 + 2];
-      CHECK(lum > 0);
+      if (lum > 0) ++lit;
     }
-    std::printf("       res %d: pitch %.3f, box %.1f units, %d particles, all 6 faces lit\n", res,
-                g_rsim.pitch(), g_rsim.volume().box().size().x, g_rsim.particleCount());
+    CHECK(lit >= (PARTSIM_ENABLE_HEAT ? 6 : 5));
+    std::printf("       res %d: pitch %.3f, box %.1f units, %d particles, %d/6 faces lit\n", res,
+                g_rsim.pitch(), g_rsim.volume().box().size().x, g_rsim.particleCount(), lit);
   }
 }
 

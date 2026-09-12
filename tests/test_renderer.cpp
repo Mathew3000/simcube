@@ -57,10 +57,15 @@ TEST(renderer_single_particle_lands_on_the_predicted_texel) {
   CHECK(pk.j == 20);
   CHECK(pk.value > 0);
   // It writes the water channel and nothing else.
+#if PARTSIM_ENABLE_SAND
   CHECK(totalIntensity(g_r, 0, kChSand) == 0);
+#endif
+#if PARTSIM_ENABLE_HEAT
   CHECK(totalIntensity(g_r, 0, kChHeat) == 0);
+#endif
 }
 
+#if PARTSIM_ENABLE_SAND
 TEST(renderer_sand_uses_its_own_channel) {
   const Geometry g = Geometry::cube(32, 1.0f);
   g_r.init(g);
@@ -69,9 +74,12 @@ TEST(renderer_sand_uses_its_own_channel) {
   g_p.add(texelCenter(pan, 5, 5) + pan.n * 1.0f, Vec3{0, 0, 0}, kSand);
   g_r.clear();
   g_r.splat(g_p, g);
+#if PARTSIM_ENABLE_SAND
   CHECK(totalIntensity(g_r, 0, kChSand) > 0);
+#endif
   CHECK(totalIntensity(g_r, 0, kChWater) == 0);
 }
+#endif
 
 TEST(renderer_falloff_has_compact_support) {
   // Load-bearing: a falloff that never reaches zero would make every particle touch every

@@ -42,8 +42,8 @@ void mirrorInto(const Simulation& sim) {
   for (int i = 0; i < p.n; ++i) CHECK(g_rp.add(p.pos(i), p.vel(i), p.mat[i]));
 
   CHECK(g_hb.init(sim.volume()));
-  const FieldGrid& f = sim.field();
-  CHECK(g_hb.cellCount() == f.cellCount());
+  const auto& f = sim.field();  // FieldGrid, or the no-heat stand-in
+  CHECK(g_hb.cellCount() == f.cellCount());  // 0 == 0 in a build without heat
   uint8_t peak = 0;
   for (int i = 0; i < f.cellCount(); ++i) {
     const uint8_t v = f.at(i);
@@ -60,11 +60,11 @@ TEST(renderstate_grid_derivation_is_shared) {
   // derivation would fail silently -- as a plume drawn in the wrong place, not as an error.
   CHECK(g_sim.initScene(Simulation::kCube, 4, 1));  // kettle: has an active field
   CHECK(g_hb.init(g_sim.volume()));
-  const FieldGrid& f = g_sim.field();
+  const auto& f = g_sim.field();  // FieldGrid, or the no-heat stand-in
   CHECK(g_hb.dim().x == f.dim().x);
   CHECK(g_hb.dim().y == f.dim().y);
   CHECK(g_hb.dim().z == f.dim().z);
-  CHECK(g_hb.cellCount() == f.cellCount());
+  CHECK(g_hb.cellCount() == f.cellCount());  // 0 == 0 in a build without heat
   std::printf("       both derive a %dx%dx%d grid, %d cells\n", g_hb.dim().x, g_hb.dim().y,
               g_hb.dim().z, g_hb.cellCount());
 }

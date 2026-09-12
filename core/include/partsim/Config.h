@@ -344,7 +344,36 @@ constexpr float kNeighbourRadius = kSmoothRadius * PARTSIM_NEIGHBOUR_MARGIN;
 static_assert(kMaxNeighbours <= 255, "per-particle neighbour counts are uint8");
 
 // --- materials -------------------------------------------------------------
-enum Material : uint8_t { kWater = 0, kSand = 1, kMaterialCount = 2 };
+// --- feature switches ------------------------------------------------------
+// Sand and fire compile out. This pays in MEMORY, not tidiness: accumulation is
+// texels x channels x 2B, so a water-only build is a third of the accumulation buffer, and
+// dropping heat also removes the FieldGrid's two buffers and the whole advection pass. At the
+// 32x32 six-face profile that is ~25KB on a node with 25.5KB free -- the difference between a
+// display node driving two faces and three.
+//
+// Both default ON, so every existing build is unchanged.
+#ifndef PARTSIM_ENABLE_SAND
+#define PARTSIM_ENABLE_SAND 1
+#endif
+#ifndef PARTSIM_ENABLE_HEAT
+#define PARTSIM_ENABLE_HEAT 1
+#endif
+
+// Material ids stay contiguous from 0, so kMaterialCount is the table size either way and
+// Solver::defaultMaterials indexes it directly.
+enum Material : uint8_t {
+  kWater = 0,
+#if PARTSIM_ENABLE_SAND
+  kSand,
+#endif
+  kMaterialCount
+};
+#if !PARTSIM_ENABLE_SAND
+// Named so scene tables and tests can still say kSand without every use needing a guard. It is
+// deliberately NOT a valid material index -- anything that tries to spawn it must be rejected,
+// not silently turned into water, or a sand scene would quietly become a water scene.
+constexpr uint8_t kSand = 0xFF;
+#endif
 
 struct MaterialParams {
   float restDensityScale;  // relative to water; sand ~2.0 so it sinks via the constraint
@@ -408,7 +437,18 @@ constexpr float kSplatExposure =
     7200.0f *
     ((kSplatRadiusWorld * kSplatRadiusWorld) / (kRestSpacing * kRestSpacing * kRestSpacing)) /
     ((kRefSplatRadius * kRefSplatRadius) / (kRefSpacing * kRefSpacing * kRefSpacing));
-enum Channel : uint8_t { kChWater = 0, kChSand = 1, kChHeat = 2, kChannelCount = 3 };
+// Channels follow the enabled materials and stay contiguous from 0, because the accumulation
+// buffer is indexed as texel*kChannelCount + channel and a gap would waste a sixth of it.
+enum Channel : uint8_t {
+  kChWater = 0,
+#if PARTSIM_ENABLE_SAND
+  kChSand,
+#endif
+#if PARTSIM_ENABLE_HEAT
+  kChHeat,
+#endif
+  kChannelCount
+};
 // Heat is a field, not particles, so its accumulated intensity needs its own scale to land in
 // the same 0..kSplatExposure range the particle channels use.
 constexpr float kHeatGain = 5200.0f;

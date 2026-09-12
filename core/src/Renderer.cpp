@@ -7,7 +7,12 @@ namespace {
 
 // Which accumulation channel a material writes into.
 inline int channelOf(uint8_t material) {
+#if PARTSIM_ENABLE_SAND
   return material == kSand ? (int)kChSand : (int)kChWater;
+#else
+  (void)material;
+  return (int)kChWater;
+#endif
 }
 
 inline uint16_t satAdd(uint16_t a, int b) {
@@ -168,8 +173,12 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
 
   for (int i = 0; i < n; ++i) {
     const uint16_t aw = src[i * kChannelCount + kChWater];
+#if PARTSIM_ENABLE_SAND
     const uint16_t as = src[i * kChannelCount + kChSand];
+#endif
+#if PARTSIM_ENABLE_HEAT
     const uint16_t ah = src[i * kChannelCount + kChHeat];
+#endif
 
     int r = 0, gg = 0, b = 0;
     uint8_t c[3];
@@ -178,14 +187,18 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
       ramp(pal.water, palB.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
+#if PARTSIM_ENABLE_SAND
     if (as) {
       ramp(pal.sand, palB.sand, iclamp((int)((float)as * toLevel), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
+#endif
+#if PARTSIM_ENABLE_HEAT
     if (ah) {
       ramp(pal.heat, palB.heat, iclamp((int)((float)ah * (255.0f / kHeatGain)), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
+#endif
 
     uint8_t* o = out + (std::size_t)i * (std::size_t)bytesPerTexel;
     o[0] = (uint8_t)imin(255, r);
@@ -196,6 +209,12 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
 }
 
 void Renderer::splatField(HeatView f, const Geometry& g) {
+#if !PARTSIM_ENABLE_HEAT
+  // No heat channel to accumulate into. The signature stays so callers need no guard.
+  (void)f;
+  (void)g;
+  return;
+#else
   if (f.empty) return;  // nothing burning: whole pass skipped
 
   const IVec3 d = f.dim;
@@ -244,6 +263,7 @@ void Renderer::splatField(HeatView f, const Geometry& g) {
       }
     }
   }
+#endif
 }
 
 void Renderer::accumulate(ParticleView p, HeatView f, const Geometry& g) {

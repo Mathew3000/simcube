@@ -33,6 +33,7 @@ float heatCentreX(const FieldGrid& f) {
   return wsum > 0.0 ? (float)(sum / wsum) : -1e30f;
 }
 
+#if PARTSIM_ENABLE_HEAT
 int totalHeat(const FieldGrid& f) {
   int t = 0;
   for (int i = 0; i < f.cellCount(); ++i) t += f.at(i);
@@ -44,8 +45,11 @@ void campfire(int steps) {
   g_sim.initScene(Simulation::kCube, 1, 7);
   for (int s = 0; s < steps; ++s) g_sim.stepFixed();
 }
+#endif
+
 }  // namespace
 
+#if PARTSIM_ENABLE_HEAT
 TEST(field_stays_empty_without_emitters) {
   // Water-only scenes must pay nothing for fire existing: the advection pass exits immediately.
   g_sim.initScene(Simulation::kCube, 0, 1);  // water tank
@@ -56,7 +60,7 @@ TEST(field_stays_empty_without_emitters) {
 
 TEST(field_emitter_lights_and_rises) {
   campfire(120);
-  const FieldGrid& f = g_sim.field();
+  const auto& f = g_sim.field();  // FieldGrid, or the no-heat stand-in
   CHECK(!f.empty());
   CHECK(totalHeat(f) > 0);
 
@@ -72,7 +76,7 @@ TEST(field_cools_so_heat_does_not_fill_the_box) {
   // Cooling is the only sink in a closed box. Without enough of it, heat piles against the
   // ceiling and the top face ends up as bright as the fire itself.
   campfire(400);
-  const FieldGrid& f = g_sim.field();
+  const auto& f = g_sim.field();  // FieldGrid, or the no-heat stand-in
   const IVec3 d = f.dim();
 
   // Compare the bottom fifth against the top fifth.
@@ -118,7 +122,7 @@ TEST(field_container_shake_pushes_the_flame) {
 
 TEST(field_never_exceeds_a_byte_or_goes_negative) {
   campfire(500);
-  const FieldGrid& f = g_sim.field();
+  const auto& f = g_sim.field();  // FieldGrid, or the no-heat stand-in
   for (int i = 0; i < f.cellCount(); ++i) CHECK(f.at(i) <= 255);
   // sample() is normalised to 0..1 and must not overshoot at the hottest cell.
   const IVec3 d = f.dim();
@@ -151,6 +155,8 @@ TEST(field_dies_out_when_the_emitter_is_removed) {
 
 // --- scenes ----------------------------------------------------------------
 
+#endif  // PARTSIM_ENABLE_HEAT -- the field_* group above
+
 TEST(scene_table_is_sane) {
   CHECK(sceneCount() >= 5);
   for (int i = 0; i < sceneCount(); ++i) {
@@ -181,10 +187,19 @@ TEST(scene_loads_the_materials_it_declares) {
     for (int k = 0; k < g_sim.particles().n; ++k)
       (g_sim.particles().mat[k] == kSand ? sand : water)++;
 
+#if PARTSIM_ENABLE_SAND
     if (sc.sandCount == 0) CHECK(sand == 0);
-    if (sc.waterCount == 0) CHECK(water == 0);
     if (sc.sandCount > 0) CHECK(sand > 0);
+    if (sc.waterCount == 0) CHECK(water == 0);
     if (sc.waterCount > 0) CHECK(water > 0);
+#else
+    // Sand becomes water in this build, so a sand scene loads water and an empty scene stays
+    // empty. Asserting the scene's declared VOLUME arrives is still meaningful; asserting which
+    // material it arrives as is not.
+    CHECK(sand == 0);
+    if (sc.sandCount + sc.waterCount > 0) CHECK(water > 0);
+    if (sc.sandCount + sc.waterCount == 0) CHECK(water == 0);
+#endif
     CHECK(g_sim.particleCount() <= g_sim.capacity());
   }
 }
@@ -301,6 +316,7 @@ TEST(scene_transition_crossfades_the_palette) {
   CHECK(length(mid - after) > 2.0f);
 }
 
+#if PARTSIM_ENABLE_SAND
 TEST(scene_transition_respects_capacity) {
   // Draining before refilling matters: a scene that swaps one material for another must not
   // briefly exceed capacity and over-compress.
@@ -317,3 +333,4 @@ TEST(scene_transition_respects_capacity) {
   CHECK(sand > 0);
   CHECK(water == 0);
 }
+#endif  // PARTSIM_ENABLE_SAND -- it swaps water for sand

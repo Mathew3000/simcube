@@ -24,6 +24,17 @@ IVec3 heatGridDim(const SimVolume& v, float cellSize) {
 }
 
 bool HeatBuffer::init(const SimVolume& v) {
+#if !PARTSIM_ENABLE_HEAT
+  // No storage and no grid. Matching the disabled field on the master matters: a node that
+  // reported a grid size here would disagree with the frames it receives.
+  (void)v;
+  lo_ = Vec3{0.0f, 0.0f, 0.0f};
+  cell_ = 0.0f;
+  dim_ = IVec3{0, 0, 0};
+  cellCount_ = 0;
+  peak_ = 0;
+  return true;
+#else
   lo_ = v.box().lo;
   cell_ = heatCellSize();
   dim_ = heatGridDim(v, cell_);
@@ -31,6 +42,7 @@ bool HeatBuffer::init(const SimVolume& v) {
   if (cellCount_ > kMaxFieldCells) return false;
   clear();
   return true;
+#endif
 }
 
 void HeatBuffer::clear() {

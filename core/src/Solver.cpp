@@ -21,7 +21,9 @@ const MaterialParams* defaultMaterials() {
   static const MaterialParams mats[kMaterialCount] = {
       // restDensityScale, xsph, friction, staticVelocity
       {1.0f, kXsphC, 0.0f, 0.0f},  // water: freely flowing, mild XSPH cohesion
-      {2.0f, 0.0f, 0.7f, 0.35f},   // sand: twice as dense so it sinks, high friction
+#if PARTSIM_ENABLE_SAND
+      {2.0f, 0.0f, 0.7f, 0.35f},  // sand: twice as dense so it sinks, high friction
+#endif
   };
   return mats;
 }

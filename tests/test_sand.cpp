@@ -2,6 +2,11 @@
 #include "partsim/Rng.h"
 #include "partsim/Solver.h"
 
+// The whole file is about the sand material, so it compiles away with it. An empty translation
+// unit is fine; the alternative -- guarding each TEST -- leaves a file that reads as if it still
+// covers something it cannot.
+#if PARTSIM_ENABLE_SAND
+
 using namespace partsim;
 
 namespace {
@@ -180,3 +185,5 @@ TEST(water_is_unaffected_by_the_friction_pass) {
   CHECK(defaultMaterials()[kSand].restDensityScale >
         defaultMaterials()[kWater].restDensityScale);
 }
+
+#endif  // PARTSIM_ENABLE_SAND

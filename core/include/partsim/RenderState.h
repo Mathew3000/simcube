@@ -98,6 +98,11 @@ class RenderParticles {
 };
 
 // Single-buffer heat state for a node that only draws.
+//
+// With PARTSIM_ENABLE_HEAT off this holds no cells at all, which is most of what a water-only
+// display node saves: kMaxFieldCells bytes of storage, and a decode and splat pass that can then
+// never run. cellCount() is 0 and the view reports empty, so it agrees with the master's own
+// disabled field rather than describing a grid neither end will fill.
 class HeatBuffer {
  public:
   // Dimensions come from the shared derivation, so they match whatever the master computed.
@@ -119,7 +124,11 @@ class HeatBuffer {
   }
 
  private:
+#if PARTSIM_ENABLE_HEAT
   uint8_t cells_[kMaxFieldCells];
+#else
+  static constexpr uint8_t* cells_ = nullptr;
+#endif
   Vec3 lo_{0.0f, 0.0f, 0.0f};
   float cell_ = 1.0f;
   IVec3 dim_{1, 1, 1};
