@@ -7,6 +7,14 @@
 
 using namespace partsim;
 
+// The HUB75 library's brightness table is chosen by the preprocessor; the depth the driver runs at
+// comes from Config.h. When they disagree the library truncates its table's output to the runtime
+// depth, and the ramp wraps -- measured, before this assert existed, as input 144 sending 62 and
+// input 152 sending 7. A third-party preprocessor cannot read kColourBits, so platformio.ini
+// repeats it and this refuses to build if the repetition ever drifts.
+static_assert((int)kColourBits == PIXEL_COLOR_DEPTH_BITS,
+              "PIXEL_COLOR_DEPTH_BITS in platformio.ini must equal kColourBits from Config.h");
+
 bool PanelDriver::begin(const Geometry& g, uint8_t depthBits, uint8_t brightness) {
   int all[kMaxPanels];
   const int n = g.count();
