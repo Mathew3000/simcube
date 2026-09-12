@@ -120,6 +120,10 @@ class Simulation {
   const SimVolume& volume() const { return volume_; }
   const Particles& particles() const { return particles_; }
   const Solver& solver() const { return solver_; }
+
+  // Where a platform hands the solver a second core. Serial by default on every target; see
+  // Parallel.h for which passes are eligible and why the rest are not.
+  void setParallel(Parallel* par) { solver_.setParallel(par); }
   Renderer& renderer() { return renderer_; }
   const Renderer& renderer() const { return renderer_; }
 

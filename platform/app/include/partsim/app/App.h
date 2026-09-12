@@ -102,6 +102,11 @@ class App {
   const Geometry& geometry() const { return geom_; }
   const SimVolume& volume() const { return vol_; }
 #else
+  // Hands the solver a second core, where the platform has one. Serial everywhere else, and
+  // bit-identical either way -- see Parallel.h. Not part of begin() because the worker task must
+  // exist first, and on FreeRTOS that is the platform's business.
+  void setParallel(Parallel* par) { sim_.setParallel(par); }
+
   const Geometry& geometry() const { return sim_.geometry(); }
   const SimVolume& volume() const { return sim_.volume(); }
 #endif

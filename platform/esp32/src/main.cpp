@@ -27,6 +27,7 @@
 #include <esp_wifi.h>
 
 #include "Lsm6dsox.h"
+#include "CoreParallel.h"
 #include "PanelDriver.h"
 #include "Pins.h"
 #include "RoleStraps.h"
@@ -119,6 +120,7 @@ SpiMasterLink g_spiMaster;
 SpiDisplayLink g_spiDisplay;
 #endif
 
+CoreParallel g_coreParallel;
 Platform g_plat{&g_console, &g_clock, &g_panels, &g_imu, &g_nullLink, &g_hooks};
 App g_app(g_plat);  // ~137KB of pools, so global rather than anywhere near a stack
 
@@ -255,11 +257,14 @@ void setup() {
       g_console.println("FATAL: HUB75 init failed -- check Pins.h against the wiring");
       fatal();
     }
-    g_console.printf("panels: chain %dx%d, rows %s\n", g_panels.chain().chainWidth(),
+    // Two separate facts, and the second one is a self-test rather than a claim: allRunsHorizontal
+    // says the MOUNT TABLE permits the row-walking blit, fastBlit says the DMA buffer layout
+    // actually verified against drawPixelRGB888 at boot (PanelFramebuffer.h).
+    g_console.printf("panels: chain %dx%d, rows %s, blit %s\n", g_panels.chain().chainWidth(),
                      g_panels.chain().chainHeight(),
-                     g_panels.allRunsHorizontal(g_app.geometry())
-                         ? "all horizontal (fast blit)"
-                         : "some vertical (slower blit)");
+                     g_panels.allRunsHorizontal(g_app.geometry()) ? "all horizontal"
+                                                                 : "some vertical",
+                     g_panels.fastBlit() ? "row-walking" : "per-texel");
   }
 #endif
 
@@ -317,6 +322,15 @@ void setup() {
 #endif
 #else
   // 6KB of stack: the solver recurses nowhere and every pool is static, so this is generous.
+  // The solver's second core. Started before the step task so the worker is already parked on its
+  // notification when the first frame runs, and pinned to core 0, which otherwise holds only the
+  // IMU poll. Priority matches the step task: a lower one would let imuTask stall half of every
+  // split, which shows up as a frame time that is occasionally double.
+  if (g_coreParallel.begin(0, 2)) {
+    g_app.setParallel(&g_coreParallel);
+  } else {
+    g_console.println("WARNING: second-core worker failed to start; solver stays single-core");
+  }
   xTaskCreatePinnedToCore(simTask, "sim", 6144, nullptr, 2, &Esp32Hooks::g_stepTask, 1);
 #endif
 
