@@ -871,3 +871,73 @@ system instruction later directed the opposite; the user adjudicated explicitly 
 organisation rule wins**. Commits `a36e0b1`, `3a51df5`, `a77e4b0` and `89b31d0` predate the ruling
 and carry the trailer; the user scoped the fix to future commits, so history was deliberately left
 unrewritten.
+
+### D48. The beaker overlay composites into the accumulation buffers, through two hooks **[STANDS]**
+
+`BeakerOverlay` draws after the fluid has splatted and before `resolve()`, into the same
+accumulation buffers the fluid uses, rather than into pixels. That is what lets it inherit the
+palette path and the chroma path without knowing either exists: when `PARTSIM_ENABLE_CHROMA`
+lands, the overlay composites through the new `resolve` unchanged.
+
+The alternative — drawing into the RGBA buffers after resolve — needs a second colour path, and on
+the ESP32 there are no RGBA buffers to draw into (`PARTSIM_INTERNAL_PIXELS` is 0; the firmware
+resolves one face at a time into a staging buffer). It would have meant a device-only code path
+for the one thing that is purely a look.
+
+The hook is **two** inline methods on `Renderer`, and the split carries the reasoning:
+
+* `addAccum` for the **weight** channel: additive and saturating, because an overlay that assigned
+  would make a texel darker than the fluid had made it, and an edge line would flicker dark
+  exactly where the liquid touches it.
+* `setAccum` for the **chroma** channels: overwriting, because `resolve()` takes the RATIO of the
+  dye channels, so adding a red glyph to blue dye resolves magenta over a full beaker and red over
+  an empty one. Measured on a render before it was changed. A "hold me this way up" instruction
+  whose colour tracks the fill level is the one thing it must not be.
+
+Both bounds-check `i`, `j` and `channel`, which the splat loop does not need to: the splat's
+footprint is clamped by construction, whereas overlay coordinates are arithmetic on panel
+dimensions, and an off-by-one there writes into the next render slot with nothing to show for it.
+
+`Renderer.cpp` was not touched.
+
+### D49. 3x5, one line, and an M that is not really an M **[STANDS]**
+
+The font is 3x5 because that is the smallest box the Latin alphabet survives, and larger faces get
+the same table at an integer scale rather than a second table.
+
+Two things the handoff predicted turned out otherwise, both measured:
+
+**`BOTTOM` fits on one line at 32x32.** Six glyphs is `6*3 + 5*1 = 23` texels against 28 available
+inside a 2-texel margin. The wrap was built and is tested anyway; it does not trigger here. It
+would at a 4-wide box (`6*4 + 5 = 29 > 28`), which is the configuration the prediction describes.
+
+**M cannot be told from N in three columns.** Three columns have no middle vertex, so the glyph is
+chosen for "distinct from N and from H" rather than for looking like an M; the conventional
+`101/111/111/101/101` rendered as `BOTTON` on a 32x32 face. Four candidates were rendered at panel
+scale and compared, and `111/111/101/101/101` — a solid cap over two legs — was the least bad. It
+reads inside the word. It would not read as a lone character, and **3x5 is therefore the wrong box
+for anything that has to be read cold**, which is worth knowing before a console overlay puts a
+node id on a face.
+
+The font tests are built around the failure this data has rather than around spot checks: every
+glyph non-empty, more than one row deep, and **distinct from every other glyph in the table**. A
+duplicated bitmap is how a copy-paste error here survives review — green build, green tests, one
+letter rendering as another on hardware.
+
+### D50. The orientation gate is a latch with a 20-degree tolerance **[STANDS]**
+
+Armed on entering beaker mode, released the first time gravity lands within tolerance of the
+cube's own down axis, **never re-armed**. Re-arming on tilt would make pouring impossible, and
+pouring is the mode.
+
+**20 degrees is a judgement, not a measurement**, and is labelled as such in the header. The
+accelerometer blend is `alphaMax` 0.02 at 208 Hz, a ~0.35 s time constant, so a tolerance tight
+enough to demand a few degrees would also demand the cube be held still — and this gate is meant
+to be satisfied by someone standing a cube on a table. If it proves wrong it is one constant.
+
+Tested as a state assertion rather than a call count: sixty gated frames on a real `Simulation`
+leave `stateHash()` bit-identical, and sixty after release do not.
+
+The latch is deliberately **not wired to anything**. There is no beaker mode to enter yet —
+`grep -ri beaker core platform` finds the tier and the PlatformIO environment and nothing else —
+and inventing the mode in order to gate it would have been item E's decision taken by item C.

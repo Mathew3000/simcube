@@ -17,6 +17,8 @@ add_executable(partsim_tests
   test_simframe.cpp
   test_multinode.cpp
   test_chroma.cpp
+  test_font.cpp
+  test_beaker.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

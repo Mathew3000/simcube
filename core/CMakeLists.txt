@@ -15,6 +15,8 @@ add_library(partsim_core STATIC
   src/ChainMap.cpp
   src/RenderState.cpp
   src/SimFrame.cpp
+  src/Font3x5.cpp
+  src/BeakerOverlay.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)
