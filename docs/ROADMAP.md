@@ -45,20 +45,23 @@ reserves 41 MB. A CSR layout would cut it to what is used. Do it when a configur
 
 ---
 
-## W1. Feature flags — sand and fire compile out · ~2–3 d
+## W1. Feature flags — sand and fire compile out — **DONE**
 
 `PARTSIM_ENABLE_SAND` and `PARTSIM_ENABLE_HEAT`, both defaulting on.
 
 This pays in **memory**, not tidiness. Accumulation is `texels × channels × 2 B`:
 
-| configuration | accum @ 32×32×6 | accum @ 64×64×2 |
-|---|---|---|
-| water + sand + heat (today) | 36.8 KB | 49.2 KB |
-| water + sand | 24.6 KB | 32.8 KB |
-| water only | 12.3 KB | 16.4 KB |
+**Measured**, device profile, whole image:
 
-Plus the `FieldGrid` (both buffers) and the friction pass when they go. ~25–33 KB on a node with
-25.5 KB free — the difference between a display node driving two faces and three.
+| configuration | host budget | firmware RAM |
+|---|---|---|
+| water + sand + fire | 204.5 KB | 171,660 B |
+| water + sand | 189.1 KB | — |
+| water + fire | 192.5 KB | — |
+| **water only** | **177.1 KB** | **143,580 B** |
+
+27.4 KB, taking free space from 25.5 KB to 52.9 KB — the difference between a display node driving
+two faces and three.
 
 Coupling is containable: `kSand` appears in 7 places, heat and `FieldGrid` in ~30.
 
@@ -68,7 +71,7 @@ rather than silently empty.
 
 ---
 
-## W2. Colour depth · ~0.5 d
+## W2. Colour depth — **DONE**
 
 Two independent things that "4 colours vs full colour" conflates:
 
@@ -98,7 +101,7 @@ display nodes stay ESP32-S3.
 
 ---
 
-## W4. Tier configurations · ~2 d
+## W4. Tier configurations — **DONE**
 
 Named tiers, **not** free-form flags. 19 knobs is 2^19 combinations and none of them are tested; a
 combination nobody built will break silently, and there will be no golden hash to catch it.
@@ -107,8 +110,20 @@ combination nobody built will break silently, and there will be no golden hash t
 |---|---|---|---|---|
 | `lite` | 32×32 ×6 | water | 4.0 | one S3, 4-bit colour, no heat field |
 | `cube` | 32×32 ×6 | water, sand, fire | 3.0 | what ships today |
-| `beaker` | 64×64 | water | 2.5 | liquid-only, so 30 Hz physics is available |
+| `beaker` | 64×64 | water | 2.5 | 60 Hz — see below |
 | `future` | 64×64 | all | 1.0 | host-verified only; no MCU runs it |
+
+**30 Hz is NOT available to beaker mode**, which this work disproved. It was expected to be, since
+the only recorded objection was that it collapses a sand heap and a beaker has no sand. It fails
+for a second, independent reason at the finer spacing: same fixture, 2500 steps, d=2.5 settles to
+mean|v| 0.031 at 60 Hz and to 1.011 at 30 Hz, still 0.616 after 5000. Finer particles need more
+steps to shed momentum, not fewer.
+
+`future` is **build-and-run only**. It builds, runs and conserves particles; it does not pass the
+physics fixtures, because they assert a pool has reached rest within a step budget and a fine fluid
+needs far more than a linear extension of one — d=1.0 still reads 1.69 after 7500 steps where d=3.0
+reaches 0.05 in 2500. A property of the fluid, not a fault, but a green run there means "it did not
+crash" and nothing more.
 
 **The ongoing tax is golden hashes.** Each tier has different physics constants, so each needs its
 own state and pixel hash on each target, and every future physics change regenerates N pairs
@@ -128,6 +143,9 @@ runs".
 
 ## Order
 
-W1 → W2 → W4 → W3. The first three are verifiable on hardware already on the desk; W3 is the
-largest single refactor and benefits from the tiers existing first, so it has something concrete to
-be parameterised by.
+W1 → W2 → W4 → W3. **W1, W2 and W4 are done and committed**; W3 is the remaining item.
+
+W3 was left until last deliberately and is genuinely the largest piece: it rewrites the structure
+of a 901-line file that has no test of its own beyond "the firmware boots". It should be started
+fresh rather than tacked onto a session that has already moved the physics, the renderer, the
+config surface and eleven test fixtures.
