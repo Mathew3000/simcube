@@ -1,5 +1,9 @@
 # W5 — The render floor: session brief
 
+> **Done.** Both items are built and a third came out of them. Outcome and every measurement in
+> [`W5-FINDINGS.md`](W5-FINDINGS.md); the §4 baseline below is superseded by the table there. Kept
+> as written because §6, §8 and §9 are still the accurate description of working in this repo.
+
 **You are picking this up cold.** Everything needed is here or linked from here.
 
 **Another agent is working in the same repository at the same time**, on the solver's

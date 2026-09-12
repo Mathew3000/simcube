@@ -136,7 +136,9 @@ reproduced to the hundredth of a millisecond on the same board:
     512      87.54   21.27      3.37   11.33   207.68    4.8
 ```
 
-That table is the regression baseline for anything touching the render path.
+That table was the regression baseline for anything touching the render path. **W5 moved the
+`splat` and `blit` columns deliberately** — see below for the current one. `sim/step` has since
+moved too, under D44.
 
 ---
 
@@ -171,18 +173,56 @@ runs".
 
 ---
 
+## W5. The render floor — **DONE**
+
+The two halves of `DECISIONS.md` P3, which had been identified since Milestone 2 and never built.
+Both are pure optimisations: the rendered pixels are bit-identical and neither golden hash moves.
+
+| | before | after |
+|---|---|---|
+| blit at 384 particles | 11.10 ms | **6.49** |
+| splat at 384 particles | 17.57 ms | **16.20** |
+| floor (`splat + blit`) | 28.67 ms | **22.69** |
+| a free solver would give | 34.9 fps | **44.1** |
+
+The current sweep, which replaces the W3 table above as the regression baseline:
+
+```
+  count    sim/step   splat   resolve    blit    frame    fps
+    128       8.06    5.59      2.60    5.96    27.67   36.1
+    256      26.14   11.50      2.89    6.25    70.02   14.3
+    384      49.05   16.20      3.13    6.49   120.78    8.3
+    512      74.65   19.59      3.37    6.73   175.63    5.7
+```
+
+**The blit** walks `ChainRun` spans, fetching the DMA row pointer once per bitplane per row rather
+than once per bitplane per texel. It reaches the HUB75 library's private framebuffer to do it, which
+is the one choice here worth arguing with — D45, and a boot-time self-test that falls back to the
+per-texel path if the layout ever stops matching.
+
+**The splat** walks outward from the texel nearest the particle and stops at the first miss, which
+is exact rather than approximate and so cannot move a pixel. It came in at 7.8% where P3 estimated
+2-3 ms, because the texels removed are the cheapest ones — F5, which is the finding worth keeping.
+
+**A third commit came out of it**: the panels were being sent a brightness ramp that wrapped three
+times above input 144, invisible to every hash and to a board with no panels attached. F6.
+
+Full measurements, including the variants that were tried and rejected, in `W5-FINDINGS.md`.
+
+---
+
 ## Out of scope
 
 - **Beaker mode itself** (Milestone 4) — ~1–2 weeks, independent of this work.
 - **A HUB75 driver for a non-ESP MCU** — see W3.
-- **Parallelising the solver** — the eight-colour scheme (`DECISIONS.md` P2) is worth ~1.8× and
-  applies to every tier, but it is a separate change and it moves every hash.
+- **Parallelising the solver's Gauss-Seidel passes** — the eight-colour scheme was built, measured
+  and rejected (`DECISIONS.md` P2). The hazard-free passes are parallel (D44).
 
 ---
 
 ## Order
 
-W1 → W2 → W4 → W3. **All four are done and committed.**
+W1 → W2 → W4 → W3 → W5. **All five are done and committed.**
 
 W3 was left until last deliberately and was genuinely the largest piece: it rewrote the structure
 of a 903-line file that had no test of its own beyond "the firmware boots". It got a fresh session

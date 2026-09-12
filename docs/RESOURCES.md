@@ -54,13 +54,23 @@ them is not memory at all — it is CPU time and bus contention against board co
 
 ### What each option costs
 
-| option | boards | blit/node | PSRAM traffic | risk |
-|---|---|---|---|---|
-| 3 × 2 faces, DMA internal | 4 | 4.4 ms (13 % of frame) | none | lowest — no new mechanism |
-| 2 × 3 faces, DMA in PSRAM | 3 | 6.7 ms (20 %) | 9.6 MB/s | moderate |
-| 1 × 6 faces, DMA in PSRAM | 2 | 13.3 ms (40 %) | 19.2 MB/s | highest |
+| option | boards | blit/node, per-texel | blit/node, row-walking | PSRAM traffic | risk |
+|---|---|---|---|---|---|
+| 3 × 2 faces, DMA internal | 4 | 10.0 ms (30 % of frame) | **3.9 ms (12 %)** | none | lowest — no new mechanism |
+| 2 × 3 faces, DMA in PSRAM | 3 | 15.0 ms (45 %) | **5.8 ms (17 %)** | 9.6 MB/s | moderate |
+| 1 × 6 faces, DMA in PSRAM | 2 | 30.0 ms (90 %) | **11.6 ms (35 %)** | 19.2 MB/s | highest |
 
-Blit at ~130 cycles per `drawPixelRGB888` at 240 MHz, on a 33 ms frame. [A]
+Pixel pushing only — `resolve` is separate, at ~1 ms/face. Scaled by texel count from the devkit
+measurement at six 32×32 faces, on a 33 ms frame.
+
+**These rows were previously 4.4 / 6.7 / 13.3 ms**, from an assumed ~130 cycles per
+`drawPixelRGB888`. Measured, that call is **293 cycles** — 7.50 ms for 6 144 texels — so the old
+figures were optimistic by 2.3×, and on the per-texel path the six-faces-per-board option was never
+viable at all. The row-walking blit (`DECISIONS.md` P3, D45) measures **113 cycles per texel**, and
+is what makes the right-hand column and the ordering above worth reading.
+
+Scaling by texel count is the assumption that remains [A]: a 64×64 chain is four times the pixels
+*and* a wider DMA row, so contention need not scale linearly. §6 item 2.
 
 ### The prerequisite that makes PSRAM viable at all
 
@@ -79,8 +89,11 @@ the 13.3 ms of blit work.
 
 > **A PSRAM framebuffer requires the row-walking blit.** With per-pixel `drawPixelRGB888` it
 > cannot work. `ChainMap::row` already returns the start coordinate and per-texel step for exactly
-> this, so the mapping does not have to change — but the row writer itself does not exist yet, and
-> it is a hard prerequisite rather than an optimisation.
+> this, so the mapping does not have to change.
+>
+> **The row writer now exists** (`PanelDriver::blitRowFast`, `DECISIONS.md` P3 and D45) and walks
+> each bitplane row sequentially, which is the access pattern PSRAM can absorb. Internal-SRAM cost
+> at six 32×32 faces is 11.10 → 6.49 ms. The PSRAM figure is still owed — §6 item 2.
 
 ### Recommendation for the PCB
 
@@ -212,7 +225,8 @@ you use it or not.
 | SPI receive + decode | ~1 ms [A] | ~1 ms | ~1 ms |
 | splat (particles + heat) | 0.64× base [M] | 0.70× base [M] | 1.91× base [M] |
 | resolve | ~1 ms/face [A] | | |
-| blit, internal FB | 4.4 ms | 6.7 ms | 13.3 ms |
+| blit, internal FB, per-texel | 4.4 ms | 6.7 ms | 13.3 ms |
+| blit, internal FB, row-walking | [M] 6.49 ms at 6×32×32 — scale by pixels |
 | blit, PSRAM FB, row-walking | needs measurement | | |
 
 Splat figures are relative to six faces at 32×32 — a ratio, because host absolute times mean
@@ -491,8 +505,10 @@ follow it -- left absolute, coarser particles stop overlapping and the fluid rea
 
 1. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether six faces on one
    board is real.
-2. **Row-walking blit cost**, internal and PSRAM. The per-pixel path is known unviable in PSRAM;
-   the row writer does not exist yet.
+2. **Row-walking blit cost in PSRAM.** The internal-SRAM half is now measured: 11.10 → 6.49 ms at
+   six 32×32 faces, of which 3.13 is `resolve` and ~2.9 is the pixel pushing itself (`W5-FINDINGS.md`).
+   The per-texel path is known unviable in PSRAM and the row writer now exists, so what is left is
+   to run it against a PSRAM framebuffer at 64×64.
 3. **Achieved refresh** at 128×64 and 384×64, 6-bit. The 141 Hz measured on a 192×32 chain will
    not survive 4× the pixels.
 4. **Panel power** [A] — 20 W/panel drives the pack, the converter and the runtime requirement.

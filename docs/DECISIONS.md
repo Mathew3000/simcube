@@ -343,7 +343,9 @@ with "cannot be done".
 
 Prerequisite if it is ever used: a row-walking blit. `drawPixelRGB888` does a read-modify-write per
 bitplane, which is 147,456 scattered PSRAM accesses per frame at six faces, and scattered access is
-the one pattern PSRAM cannot absorb.
+the one pattern PSRAM cannot absorb. **That prerequisite is now built** (P3, D45) and it walks each
+bitplane row sequentially, which is the pattern PSRAM can absorb. The PSRAM measurement is still
+owed — `RESOURCES.md` §6 item 2.
 
 ### R2. "QEMU's timing is not trustworthy"
 
@@ -428,13 +430,28 @@ kernel gradient and not for geometry setup, which happens once.
 
 ### F2. The render floor caps the frame regardless of MCU
 
-Splat + resolve + blit is ~30.7 ms at 375 particles, and no processor removes it. Even a free
-solver gives 32.6 fps. Widening the blob to hide the coarse lattice (D21) is what put it there: it
-bought the look and it moved the bottleneck.
+Splat and blit are a floor no processor removes. Widening the blob to hide the coarse lattice (D21)
+is what put it there: it bought the look and it moved the bottleneck.
 
-Caveat on how this was stated earlier: at 375 particles the *solver* is still 84% of the frame, so
-the floor is a **ceiling**, not the current bottleneck. It becomes the binding constraint at the
-coarser spacings, where it is over half the frame.
+At 384 particles, `cube` build:
+
+| | splat | blit | floor | a free solver gives |
+|---|---|---|---|---|
+| as first measured | 17.57 | 11.10 | **28.67 ms** | 34.9 fps |
+| after P3 was built | 16.20 | 6.49 | **22.69 ms** | 44.1 fps |
+
+**The figure this entry used to carry — 30.7 ms and 32.6 fps — was wrong by one term.**
+`App::runBench` times `resolve` on its own and then times `present()`, which also resolves, so the
+`blit` column already contains `resolve`. Quoting the floor as "splat + resolve + blit" counts
+resolve twice. The `frame` column has always been right; only the prose derived from it was not.
+
+Caveat on how this was stated earlier: at 375 particles the *solver* is still the large majority of
+the frame, so the floor is a **ceiling**, not the current bottleneck. It becomes the binding
+constraint at the coarser spacings, where it is over half the frame.
+
+After P3, **splat is three quarters of the floor**, and its cost is the texels that do contribute
+(F5). The remaining levers on it are the blob radius (D21, F3) and split-kernel chroma (P1), not
+tighter loops.
 
 ### F3. Colour resolution is set by the blob, not by the particle
 
@@ -458,6 +475,48 @@ And a settle threshold at 1500 steps read anywhere between 0.05 and 0.85 dependi
 hoisting a single reciprocal out of a loop moved it from 0.053 to 0.568 without touching the
 physics. **A threshold a rounding change can cross is measuring chaos, not convergence.** Moved to
 2500 steps, past the knee for every variant tried.
+
+### F5. Counting texels is not counting time
+
+P3 observed that the splat scans a square box for a circular kernel, so ~21% of the texels it
+touches can never contribute, and valued removing them at 2-3 ms of 17.6. Measured, it is 1.37 ms —
+**7.8%, not 21%**.
+
+The 21% is a correct count of texels and the wrong unit. The wasted texels are the **cheapest**
+ones: a rejected texel computes `dx`, a squared distance and a compare, while an accepted one also
+does a LUT load, a multiply, a shift and a saturating read-modify-write. Removing a fifth of the
+iterations removes under a tenth of the work.
+
+The same shape appears in the blit half of P3 from the other side — there, 6 144 x 6 scattered
+accesses sounded like the whole cost and were worth 0.20 ms of 7.50, because the S3's internal SRAM
+has no data cache to miss. **Both halves of one proposal mis-estimated by counting the wrong thing**,
+and in the blit's case the count pointed at the wrong fix as well.
+
+Whenever a proposal here values a change by counting operations, the count and the cost per
+operation are two separate claims and only one of them is usually checked.
+
+### F6. The panels were being sent a wrapped brightness ramp
+
+`cie_luts.h` in the HUB75 library picks its CIE table from `PIXEL_COLOR_DEPTH_BITS` **at compile
+time**. Nothing defined it, so it defaulted to the 8-bit table -- while `setPixelColorDepthBits()`
+was handed 6 at runtime from `kColourBits`. The library takes the low 6 bits of an 8-bit value, so
+the top two were dropped.
+
+Read straight out of the DMA buffer on the devkit, red channel: input 144 sent 62, input 152 sent
+**7**, input 192 sent 60, input 200 sent **10**. The top 44% of the range was three sawteeth, and
+above 144 a brighter pixel was usually a dimmer one.
+
+Two things made it survive this long, and both are structural rather than bad luck:
+
+* **No panels are attached to the board.** HUB75 is a passive shift-register chain, so everything
+  measures correctly with nothing plugged in -- which is what makes the benchmark possible at all,
+  and it means the one failure mode that is only visible as light is the one nothing catches.
+* **No hash covers it.** Both goldens come from `Renderer::resolve`, which was correct throughout.
+  The defect lives between the driver and the panel, downstream of everything the project tests.
+
+Found only because the row-walking blit had to reproduce the compensation exactly and therefore had
+to read what it actually did. Fixed by setting the flag, and held there by a `static_assert` against
+`kColourBits` rather than by a comment (D45).
 
 ---
 
@@ -523,11 +582,20 @@ worth re-measuring. A Jacobi correction pass is the other route: it needs a 3N d
 D14 rejected at 4096 particles and which is 6 KB at the counts that actually run — the same
 inherited-from-an-invalidated-premise shape as R5.
 
-### P3. Row-walking blit and a circular splat bound **[OPEN]**
+### P3. ~~Row-walking blit and a circular splat bound~~ — **BUILT**
 
-The two halves of F2. `ChainMap` already has a `ChainRun` escape hatch designed for the blit and
-never written; `drawPixelRGB888` does a read-modify-write per bitplane. The splat scans a square
-box for a circular kernel, so ~21% of touched texels can never contribute.
+Both halves shipped. The floor went 28.67 -> 22.69 ms at 384 particles; see F2 for the table, D45
+for the one design choice worth arguing with, F5 for why the splat half came in at a third of its
+estimate, and `W5-FINDINGS.md` for the full measurements.
+
+Blit 11.10 -> 6.49 ms. The premise needed correcting first: the cost was attributed to *scattered*
+read-modify-writes, and rewriting the inner loop to write every texel to (0, 0) moved the blit by
+0.20 ms. Internal SRAM on the S3 has no data cache to miss. The 7.50 ms was per-call work, most of
+it the library recomputing the row pointer for every bitplane of every texel.
+
+Splat 17.57 -> 16.20 ms, by walking outward from the texel nearest the particle and stopping at the
+first miss rather than computing a chord — the S3 has no hardware square root (F1) and `core/`
+links no libm. Exact rather than approximate, so neither hash moves.
 
 ### P4. MCU selection **[OPEN]**
 
@@ -719,6 +787,39 @@ multipliers that drove real work. An hour of probe before a week of implementati
 insurance this project has found. The probe is kept rather than deleted — the same question has to
 be asked of any candidate in CUBE-PCB §13.1, and the answer will differ on a part with a real cache
 hierarchy.
+
+### D45. The blit reaches the HUB75 library's private framebuffer, and proves it at boot **[STANDS]**
+
+The row-walking blit (P3) needs the DMA row pointer hoisted out of the per-texel loop, which needs
+`MatrixPanel_I2S_DMA::fb`. It is private, and the library has no bulk-pixel entry point -- the
+`hlineDMA` family takes one colour for a whole span, which a fluid render never has.
+
+The alternative was vendoring a 40-file third-party library to add one accessor: a permanent
+maintenance cost, and a fork to re-apply on every upgrade, for a five-line change. So
+`platform/esp32/src/PanelFramebuffer.h` reaches the member using the explicit-instantiation idiom
+that [temp.spec]/6 exists for -- legal C++, not a layout assumption, not undefined behaviour, and
+supported by GCC and Clang since C++11.
+
+Someone could reasonably have made the other choice, so the honest statement of the cost is that
+this is a dependency on a private member's **name and type**. What makes it acceptable is that both
+ways it can break are loud rather than silent:
+
+* a renamed or retyped member is a **compile error**, not a wrong picture;
+* a changed buffer **layout** is caught at boot by `PanelDriver::verifyFastBlit()`, which blits a
+  real row through the real shipping code both ways -- library and row writer -- and compares the
+  raw DMA words. It covers the brightness table, the bitplane packing, the two-halves bit offset,
+  the chain addressing and the run direction at once, on the buffer the library actually allocated.
+  On any mismatch the driver keeps the per-texel path for good and the boot line says so.
+
+The house rule is that a claim carries the measurement that settled it, and "the layout is what I
+think it is" is a claim. The self-test is that rule applied to correctness rather than to timing,
+and it is the reason this is a decision rather than a hack.
+
+The same entry covers the smaller duplication it forced. `PIXEL_COLOR_DEPTH_BITS` has to be set in
+`platformio.ini` (F6), which repeats a number `Config.h` owns and D36 says not to repeat. A
+third-party preprocessor cannot read a `constexpr`, so the choice was to duplicate or to patch.
+Duplicated and **checked**: `PanelDriver.cpp` static_asserts the two against each other, and setting
+the flag wrong was confirmed to fail the build.
 
 ### D41. Commits carry no attribution trailer **[USER]**
 

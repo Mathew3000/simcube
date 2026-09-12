@@ -589,18 +589,26 @@ QEMU conversion factors and the full derivation.
 
 | particles | sim/step | splat | resolve | blit | frame | fps |
 |---|---|---|---|---|---|---|
-| 128 | 10.87 | 6.07 | 2.60 | 10.57 | 38.38 | 26.1 |
-| 256 | 36.44 | 12.38 | 2.89 | 10.85 | 96.11 | 10.4 |
-| 384 | 67.60 | 17.57 | 3.13 | 11.10 | 163.87 | 6.1 |
-| 512 | 102.37 | 21.27 | 3.37 | 11.33 | 237.35 | 4.2 |
+| 128 | 8.06 | 5.59 | 2.60 | 5.96 | 27.67 | 36.1 |
+| 256 | 26.14 | 11.50 | 2.89 | 6.25 | 70.02 | 14.3 |
+| 384 | 49.05 | 16.20 | 3.13 | 6.49 | 120.78 | 8.3 |
+| 512 | 74.65 | 19.59 | 3.37 | 6.73 | 175.63 | 5.7 |
 
 Solver cost scales as $n^{1.57}$ — superlinear because the gather widens as density rises.
 
-**The bottleneck has moved.** Splat + resolve + blit is a **30.7 ms floor at 375 particles that no
-processor removes**, capping the frame at 32.6 fps however fast the solver gets. Widening the blob
-to hide the coarse lattice (§4) is what put it there; it bought the look and it moved the
-bottleneck. An ESP32-P4 is ~1.7× on the solver and therefore buys ~3 fps.
+**`blit` contains `resolve`.** `present()` resolves each face into the staging buffer and then
+pushes it, while the `resolve` column times that work again on its own. A frame is
+`sim × substeps + splat + blit`, which is what the `frame` column computes; adding `resolve` to it
+counts resolve twice. Earlier revisions of this section did, and the floor below is ~3 ms lower
+than the figure it used to quote for that reason.
 
-The next real levers are software: the splat footprint (a 13×13 box scanned for a circular kernel)
-and the row-walking blit, which `ChainMap` has an escape hatch for and which has never been
-written.
+**The bottleneck has moved.** Splat + blit is a **22.69 ms floor at 384 particles that no processor
+removes**, capping the frame at 44.1 fps however fast the solver gets. Widening the blob to hide the
+coarse lattice (§4) is what put it there; it bought the look and it moved the bottleneck. An
+ESP32-P4 is ~1.7× on the solver and therefore buys a few fps.
+
+The floor was 28.67 ms until the two software levers named here were built — the circular splat
+bound and the row-walking blit, `DECISIONS.md` P3. **Splat is now three quarters of what remains**,
+and the cheap texels have already gone: what is left is the texels that genuinely contribute (F5).
+The levers on that are the blob radius, which is a look decision (§4, F3), and split-kernel chroma
+(P1) — not tighter loop bounds.
