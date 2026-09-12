@@ -135,7 +135,7 @@ cannot spare. Gauss-Seidel is cheaper, converges faster, and stays deterministic
 particle order is a pure function of position* (D17).
 
 The cost is recorded honestly: it is why the solver cannot be naively split across a second core.
-See D33 for the way out.
+See P2 for the way out that does not break determinism.
 
 ### D15. Granular friction is Coulomb-bounded and projected sequentially **[STANDS]**
 
@@ -229,7 +229,7 @@ Rendered as a ladder at a fixed waterline: 3.5 is still clean, 4.0 is borderline
 visibly blobs rather than fluid. Further coarsening buys frames by destroying the thing being
 displayed.
 
-Beaker mode tightens this further — see D32.
+Beaker mode tightens this further — see F3.
 
 ---
 
