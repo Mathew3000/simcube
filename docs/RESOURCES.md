@@ -362,10 +362,15 @@ same `-O2 -ffp-contract=off`, each vendor's own GCC, gives a direct instruction 
 | ISA | bytes | instructions | float ops | vs Xtensa |
 |---|---|---|---|---|
 | Xtensa LX7 (ESP32-S3) | 2435 | 863 | 468 (54.2%) | 1.00x |
-| RV32IMAFC (ESP32-P4) | 2148 | 645 | 345 (53.5%) | **0.75x** |
-| Cortex-M7 | 2176 | 623 | 353 (56.7%) | **0.72x** |
+| RV32IMAFC (ESP32-P4) | 2148 | 645 | 345 (53.5%) | 0.75x |
+| Cortex-M7 | 2176 | 623 | 353 (56.7%) | 0.72x |
 | Cortex-M4 | 2204 | 627 | 354 (56.5%) | 0.73x |
 | Cortex-M33 | 2208 | 626 | 358 (57.2%) | 0.73x |
+
+Those figures are from **before** the software-divide fix, and they flattered ARM and RISC-V: the
+Xtensa build was *calling out* to `__divsf3` and `sqrtf`, whose instructions are in the library and
+not in this count. With `frsqrt` inline on every target the comparison is like-for-like and the gap
+narrows to **0.81x for both** (Xtensa 873, RV32 706, Cortex-M7 703). The table below uses 0.81.
 
 This **corrects an assumption recorded here earlier**, which was that RV32 would need 1.0-1.2x
 *more* instructions than Xtensa. It needs 25% fewer, and Thumb-2 needs 28% fewer. The float
@@ -383,12 +388,14 @@ $$\text{relative speed} = \frac{1}{\text{instr ratio}} \times \frac{1.40}{\text{
 | part | core | MHz | instr | CPI | **relative** | CPI basis |
 |---|---|---|---|---|---|---|
 | ESP32-S3 | Xtensa LX7 | 240 | 1.00 | 1.40 | **1.00x** | measured |
-| RP2350 | Cortex-M33 | 150 | 0.73 | 1.50 | **0.80x** | assumed |
-| ESP32-P4 | RV32 x2 | 400 | 0.75 | 1.25 | **2.5x** | assumed |
-| STM32H743 | Cortex-M7 | 480 | 0.72 | 1.20 | **3.2x** | assumed |
-| STM32H7S3 | Cortex-M7 | 600 | 0.72 | 1.20 | **4.1x** | assumed |
-| i.MX RT1062 | Cortex-M7 | 600 | 0.72 | 1.15 | **4.2x** | assumed |
-| i.MX RT1176 | Cortex-M7 | 1000 | 0.72 | 1.15 | **7.1x** | assumed |
+| RP2350 | Cortex-M33 | 150 | 0.81 | 1.50 | **0.73x** | assumed |
+| ESP32-P4 | RV32 x2 | 400 | 0.81 | 1.25 | **2.3x** | assumed |
+| STM32H743 | Cortex-M7 | 480 | 0.81 | 1.20 | **2.9x** | assumed |
+| STM32H7S3 | Cortex-M7 | 600 | 0.81 | 1.20 | **3.6x** | assumed |
+| i.MX RT1062 | Cortex-M7 | 600 | 0.81 | 1.15 | **3.8x** | assumed |
+| i.MX RT1176 | Cortex-M7 | 1000 | 0.81 | 1.15 | **6.3x** | assumed |
+
+Relative to an S3 that is itself now 1.18x faster than when the beaker table below was computed.
 
 **CPI is the weak term and it is the one that decides the answer.** The S3's 1.40 is measured and
 includes its SRAM stalls. Cortex-M7 is dual-issue in-order with a 6-stage pipeline and, crucially,
