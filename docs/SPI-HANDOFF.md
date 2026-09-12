@@ -178,7 +178,25 @@ If you conclude the **wire format** is wrong, that is a finding to report, not a
    working env, then delete `core.pio-link`, `app.pio-link` and `integrity.dat` from it —
    `symlink://` records an absolute path and you will otherwise compile another checkout's `core/`
    (`DECISIONS.md` D47).
-6. **No panels are attached.** A display node blits into a DMA buffer that clocks out into nothing,
+6. **`core/` will be mid-edit under you, and your firmware build compiles it.** Another agent is
+   working in `core/` throughout, so `pio run` can fail on a file you never touched — a declaration
+   saved before its definition, a half-renamed symbol. Do not debug it and do not fix it; it is
+   someone else's file in flight. Either wait a minute and retry, or build in isolation:
+
+   ```bash
+   git worktree add /tmp/spi HEAD          # HEAD only: no uncommitted work from anyone
+   cp <your modified files> /tmp/spi/<same paths>
+   mkdir -p /tmp/spi/platform/esp32/.pio/libdeps
+   cp -R platform/esp32/.pio/libdeps/cube /tmp/spi/platform/esp32/.pio/libdeps/cube
+   rm -f /tmp/spi/platform/esp32/.pio/libdeps/cube/{core.pio-link,app.pio-link,integrity.dat}
+   cd /tmp/spi/platform/esp32 && pio run -e master
+   ```
+
+   The `rm` is trap 5 and is not optional — without it the worktree compiles the *main* checkout's
+   `core/`, which is the thing you were trying to escape. Clean up with
+   `git worktree remove /tmp/spi --force`.
+
+7. **No panels are attached.** A display node blits into a DMA buffer that clocks out into nothing,
    which is fine and still measures correctly. You cannot *see* a frame arrive; you have to report
    it.
 
