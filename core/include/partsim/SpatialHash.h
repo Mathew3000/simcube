@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
 
+#include "partsim/Parallel.h"
+
 #include "partsim/Particles.h"
 #include "partsim/SimVolume.h"
 
@@ -25,7 +27,12 @@ class SpatialHash {
   // Buckets by PREDICTED position and permutes every particle array into cell order.
   // scratch must be at least kMaxParticles * 4 bytes.
   // Returns false if the volume has more cells than the compiled capacity.
-  bool build(const SimVolume& v, Particles& p, void* scratch);
+  // `par` splits the neighbour-list build only. The counting sort and the permutation stay serial:
+  // the sort is a prefix sum over cells, which is inherently sequential, and the permutation writes
+  // through an index vector where two workers could collide. The build is the expensive part -- it
+  // is a full 27-cell scan per particle, the single largest gather in a step -- and it writes only
+  // list_[i] and count_[i], so it satisfies the Parallel.h contract.
+  bool build(const SimVolume& v, Particles& p, void* scratch, Parallel* par = nullptr);
 
   int cellCount() const { return cellCount_; }
 
@@ -46,7 +53,8 @@ class SpatialHash {
 
  private:
 #if PARTSIM_NEIGHBOUR_CACHE
-  void buildNeighbours(const SimVolume& v, const Particles& p);
+  void buildNeighbours(const SimVolume& v, const Particles& p, Parallel& par);
+  void buildNeighbourRange(const SimVolume& v, const Particles& p, int begin, int end);
 #endif
 
   int cellCount_ = 0;

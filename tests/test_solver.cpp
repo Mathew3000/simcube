@@ -351,3 +351,68 @@ TEST(neighbour_cache_margin_covers_what_the_kernel_needs) {
   CHECK(kMaxNeighbours <= 255);
 }
 #endif
+
+// --- the Parallel contract ----------------------------------------------------------------
+namespace {
+// Splits [0,n) into `parts` chunks and runs them on this thread in REVERSE order.
+//
+// Reverse is the whole design, and the first version of this test got it wrong. Running chunks
+// back to back in ascending order reproduces the serial order exactly, so a chunk boundary never
+// changes what an element can see -- verified by injecting a genuine order dependency into the
+// density pass and watching all four split counts still agree. That test proved nothing.
+//
+// Running the last chunk first means element i is computed before element i-1, which is precisely
+// what a second core would do to some pair of elements. A pass that is truly split-independent
+// does not care; a Gauss-Seidel pass handed here changes its answer immediately. No threads, no
+// scheduler, no flakiness -- and it fails on the injected dependency, which is how this version is
+// known to work.
+class ChunkParallel : public Parallel {
+ public:
+  explicit ChunkParallel(int parts) : parts_(parts) {}
+  void forRange(int n, void* ctx, RangeFn fn) override {
+    if (n <= 0) return;
+    const int step = (n + parts_ - 1) / parts_;
+    int starts[64];
+    int count = 0;
+    for (int b = 0; b < n && count < 64; b += step) starts[count++] = b;
+    for (int k = count - 1; k >= 0; --k) fn(ctx, starts[k], imin(n, starts[k] + step));
+  }
+  int workers() const override { return parts_; }
+
+ private:
+  int parts_;
+};
+}  // namespace
+
+TEST(parallel_split_does_not_change_the_answer) {
+  // Everything handed to Parallel::forRange must be split-independent. This is the guard on that:
+  // the same settle, run with 1, 2, 3 and 7 chunks, must produce bit-identical state. An uneven
+  // count (3, 7) is deliberate -- a bug that only shows at a particular boundary hides behind
+  // powers of two.
+  uint32_t reference = 0;
+  const int kSplits[] = {1, 2, 3, 7};
+  for (int parts : kSplits) {
+    ChunkParallel par(parts);
+    g_solver.init();
+    g_solver.setParallel(&par);
+    SimVolume v;
+    v.build(Geometry::cube(32, 1.0f), kSlabDepth, kCellSize);
+    g_p.clear();
+    fillBottom(g_p, v.box(), particlesForFill(1500), kWater, 0xA11CE);
+    for (int s = 0; s < 120; ++s)
+      g_solver.step(g_p, v, g_h, g_scratch, defaultMaterials(),
+                    Vec3{0.0f, -kGravityMag, 0.0f}, kFixedDt);
+    // Hash positions and velocities directly: this is about the particle state, not a Simulation.
+    uint64_t h64 = fnv1a(g_p.x, (size_t)g_p.n * sizeof(float));
+    h64 = fnv1a(g_p.y, (size_t)g_p.n * sizeof(float), h64);
+    h64 = fnv1a(g_p.z, (size_t)g_p.n * sizeof(float), h64);
+    h64 = fnv1a(g_p.vx, (size_t)g_p.n * sizeof(float), h64);
+    h64 = fnv1a(g_p.vy, (size_t)g_p.n * sizeof(float), h64);
+    h64 = fnv1a(g_p.vz, (size_t)g_p.n * sizeof(float), h64);
+    const uint32_t h = (uint32_t)(h64 ^ (h64 >> 32));
+    std::printf("       %d chunk(s): %d particles, state %08x\n", parts, g_p.n, h);
+    if (parts == 1) reference = h;
+    CHECK(h == reference);
+  }
+  g_solver.setParallel(nullptr);  // back to serial for every test after this one
+}

@@ -112,7 +112,35 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
   // Fused deliberately. Computing density and sum-of-squared-gradients in separate passes
   // doubles the number of full 27-cell scans, and those scans are the dominant cost of the
   // whole solver (~80 candidate visits per particle per scan).
-  for (int i = 0; i < n; ++i) {
+  //
+  // PARALLEL, and safe to be: this pass writes p.lam[i] and NOTHING else. It reads pred[] and
+  // lam[] is never read here, so no worker can observe another's write and the result does not
+  // depend on how [0,n) is split. That is the Parallel.h contract, and the reason this pass can be
+  // split while the correction below cannot.
+  {
+    struct Ctx {
+      Solver* self;
+      Particles* p;
+      const SimVolume* v;
+      const SpatialHash* h;
+      const MaterialParams* mats;
+      const Aabb* b;
+    } ctx{this, &p, &v, &h, mats, &b};
+    par_->forRange(n, &ctx, [](void* vp, int begin, int end) {
+      Ctx& c = *(Ctx*)vp;
+      c.self->densityPass(*c.p, *c.v, *c.h, c.mats, *c.b, begin, end);
+    });
+  }
+
+  // Everything below is Gauss-Seidel and stays on one core for now: pass C writes pred[i] while
+  // reading pred[j], so a split would change the answer with the worker count. Cell colouring is
+  // what makes it splittable; see DECISIONS.md P2.
+  correctionPasses(p, v, h, mats);
+}
+
+void Solver::densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
+                         const MaterialParams* mats, const Aabb& b, int begin, int end) {
+  for (int i = begin; i < end; ++i) {
     const Vec3 pi = p.pred(i);
     const float rho0 = mats[p.mat[i]].restDensityScale;
     const float w = mass_ / rho0;
@@ -141,6 +169,13 @@ void Solver::solveIteration(Particles& p, const SimVolume& v, const SpatialHash&
     sumGrad2 += length2(gradI);
     p.lam[i] = -C / (sumGrad2 + epsilon_);
   }
+
+}
+
+void Solver::correctionPasses(Particles& p, const SimVolume& v, const SpatialHash& h,
+                              const MaterialParams* mats) {
+  const int n = p.n;
+  const Aabb& b = v.box();
 
   // --- pass C: positional correction --------------------------------------
   // Applied in place, i.e. Gauss-Seidel rather than the textbook Jacobi. That costs a
@@ -248,16 +283,28 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
   // it tunnels past the neighbours that were supposed to stop it.
   const float vMax = 0.4f * k_.h / dt;
   const float vMax2 = vMax * vMax;
-  for (int i = 0; i < n; ++i) {
-    Vec3 vel = p.vel(i) + gravity * dt;
-    const float s2 = length2(vel);
-    if (s2 > vMax2) vel *= vMax * prsqrt(s2);
-    p.setVel(i, vel);
-    p.setPred(i, clampToBox(p.pos(i) + vel * dt, b));
+  // PARALLEL: writes vel[i] and pred[i] from pos[i] and vel[i]. No element reads another.
+  {
+    struct Ctx {
+      Particles* p;
+      const Aabb* b;
+      Vec3 gravity;
+      float dt, vMax, vMax2;
+    } ctx{&p, &b, gravity, dt, vMax, vMax2};
+    par_->forRange(n, &ctx, [](void* vp, int begin, int end) {
+      Ctx& c = *(Ctx*)vp;
+      for (int i = begin; i < end; ++i) {
+        Vec3 vel = c.p->vel(i) + c.gravity * c.dt;
+        const float s2 = length2(vel);
+        if (s2 > c.vMax2) vel *= c.vMax * prsqrt(s2);
+        c.p->setVel(i, vel);
+        c.p->setPred(i, clampToBox(c.p->pos(i) + vel * c.dt, *c.b));
+      }
+    });
   }
 
   // Grid is built on PREDICTED positions: those are what the constraints operate on.
-  h.build(v, p, scratch);
+  h.build(v, p, scratch, par_);
 
   for (int it = 0; it < iterations_; ++it) solveIteration(p, v, h, mats);
 

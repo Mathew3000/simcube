@@ -2,7 +2,7 @@
 
 namespace partsim {
 
-bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch) {
+bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch, Parallel* par) {
   cellCount_ = v.cellCount();
   if (cellCount_ > kMaxGridCells) return false;
 
@@ -44,7 +44,9 @@ bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch) {
   for (int k = 0; k < n; ++k) p.mat[k] = bs[k];
 
 #if PARTSIM_NEIGHBOUR_CACHE
-  buildNeighbours(v, p);
+  buildNeighbours(v, p, par ? *par : serialParallel());
+#else
+  (void)par;
 #endif
   return true;
 }
@@ -63,11 +65,22 @@ bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch) {
 //
 // Order is preserved exactly: cells ascending in flatten() order, particles ascending within a
 // cell, which is what the cross-target determinism rests on.
-void SpatialHash::buildNeighbours(const SimVolume& v, const Particles& p) {
-  const float h2 = kNeighbourRadius * kNeighbourRadius;
-  const int n = p.n;
+void SpatialHash::buildNeighbours(const SimVolume& v, const Particles& p, Parallel& par) {
   truncated_ = 0;
-  for (int i = 0; i < n; ++i) {
+  struct Ctx {
+    SpatialHash* self;
+    const SimVolume* v;
+    const Particles* p;
+  } ctx{this, &v, &p};
+  par.forRange(p.n, &ctx, [](void* vp, int begin, int end) {
+    Ctx& c = *(Ctx*)vp;
+    c.self->buildNeighbourRange(*c.v, *c.p, begin, end);
+  });
+}
+
+void SpatialHash::buildNeighbourRange(const SimVolume& v, const Particles& p, int begin, int end) {
+  const float h2 = kNeighbourRadius * kNeighbourRadius;
+  for (int i = begin; i < end; ++i) {
     ParticleIndex* out = list_ + (size_t)i * (size_t)kMaxNeighbours;
     const Vec3 pi = p.pred(i);
     int c = 0;
@@ -79,6 +92,9 @@ void SpatialHash::buildNeighbours(const SimVolume& v, const Particles& p) {
       out[c++] = (ParticleIndex)j;
     });
     count_[i] = (uint8_t)c;
+    // Diagnostic only, and deliberately not synchronised: a lost increment under concurrency
+    // understates a count that is zero in every shipping configuration, and the alternative is an
+    // atomic in the hottest loop in the project to protect a number nobody reads at speed.
     if (full) ++truncated_;
   }
 }

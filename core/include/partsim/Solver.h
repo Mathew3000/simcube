@@ -1,4 +1,5 @@
 #pragma once
+#include "partsim/Parallel.h"
 #include "partsim/SpatialHash.h"
 
 namespace partsim {
@@ -59,6 +60,11 @@ class Solver {
   // normalisation constant. Also builds the wall-density LUT.
   void init();
 
+  // Where the solver finds a second core. Defaults to serial, so every target that does not set
+  // this is bit-identical to before -- see Parallel.h for the contract and for which passes are
+  // eligible (the Gauss-Seidel corrections are not).
+  void setParallel(Parallel* par) { par_ = par ? par : &serialParallel(); }
+
   // Runtime-tunable so the host bench can sweep them; both default to the Config values.
   void setIterations(int n) { iterations_ = imax(1, n); }
   void setDamping(float d) { damping_ = pclamp(d, 0.0f, 1.0f); }
@@ -96,7 +102,13 @@ class Solver {
   float wallDensityAt(Vec3 pi, const Aabb& b, float rho0) const;
   void solveIteration(Particles& p, const SimVolume& v, const SpatialHash& h,
                       const MaterialParams* mats);
+  // Split out so the hazard-free half can be handed to Parallel::forRange over [begin, end).
+  void densityPass(Particles& p, const SimVolume& v, const SpatialHash& h,
+                   const MaterialParams* mats, const Aabb& b, int begin, int end);
+  void correctionPasses(Particles& p, const SimVolume& v, const SpatialHash& h,
+                        const MaterialParams* mats);
 
+  Parallel* par_ = &serialParallel();
   Kernels k_;
   int iterations_ = kSolverIterations;
   float damping_ = kVelocityDamping;

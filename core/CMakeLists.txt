@@ -4,6 +4,7 @@ add_library(partsim_core STATIC
   src/Geometry.cpp
   src/SimVolume.cpp
   src/SpatialHash.cpp
+  src/Parallel.cpp
   src/Solver.cpp
   src/Renderer.cpp
   src/PaletteData.cpp
