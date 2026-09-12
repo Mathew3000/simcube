@@ -45,11 +45,18 @@ the point: it is 27.4 KB, and it is why a display node can consider three faces.
 So beaker mode needs its **own** channel configuration rather than borrowing dead ones:
 
 ```
-PARTSIM_ENABLE_CHROMA  ->  kChannelCount = 3   (weight, chroma r, chroma g)
+PARTSIM_ENABLE_CHROMA  ->  kChannelCount = 4   (weight, chroma r, chroma g, chroma b)
 ```
 
-Same three channels, same memory as today's full build, but named for what they are and available
-independently of whether sand exists. `kChBlue` is implied as `weight − r − g`.
+**Four, not three, and blue is stored rather than implied** — which the sketch got wrong for a
+reason that no longer applies. Colour resolves as the ratio of the chroma channels, and the
+denominator that ratio needs is the chroma channels' *own* narrow-disc weight, which is exactly
+`cR + cG + cB`. Imply one and the denominator becomes circular. The sketch crammed into three to
+dodge "+16 KB on a display node at 200 KB of 230"; W1 dropped that node to 115 KB and the
+constraint went with it.
+
+`PARTSIM_ENABLE_CHROMA` is set **by the tier**, not by an environment: a beaker whose liquid has no
+colour cannot mix, and with one channel the gate's red arrows render white (`DECISIONS.md` D52).
 
 ### And a refinement the sketch predates
 
@@ -69,7 +76,7 @@ to look wrong. Judge it on a render before building anything on top.
 
 ## 3. Work items
 
-### A. Chroma, mixing, and the split-kernel splat — **mine**
+### A. Chroma, mixing, and the split-kernel splat — **DONE** (`9c88b27`, `b0f8323`)
 
 `core/`: `Particles` gains `cr[]`/`cg[]` (2 B/particle, 1 KB at device capacity). Mixing rides the
 existing XSPH neighbour loop — it already gathers neighbours and accumulates a kernel-weighted
@@ -80,29 +87,36 @@ and `resolve` recovers colour as the ratio.
 A separate `colourHash()` rather than folding chroma into `stateHash()`: the state goldens are
 stable references across four tiers and three targets, and chroma has nothing to do with positions.
 
-**Mine because** it is foundational, it is a look decision, and it touches `Renderer.cpp` and
-`Solver.cpp` — the two files every other item would collide with.
+Landed with three corrections worth carrying into B: dye is **8.8 fixed point**, because a byte
+destroyed 98% of it over 600 steps — diffusion moves fractions of a unit per particle per step and
+truncating each one throws the remainder away. Mixing is Gauss-Seidel, so dye is conserved only to
+**5%, and that drift plateaus** rather than accumulating. And the split kernel is worth less than
+claimed: it sharpens a dye boundary from 4 texels to 2 only when the gradient is sharper than the
+weight kernel, so it buys a crisp **pour** — which is exactly what B creates — and nothing at all on
+a settled mix.
 
-### B. Open top and spill — *agent, blocked on A*
+### B. Open top and spill — **agent, ready now** (`M4-B-HANDOFF.md`)
 
 `SimVolume` gains an open-face flag; `clampToBox` stops clamping there. Particles past it leave via
 the existing O(1) `removeAt` into an outbound list carrying position, velocity and chroma. Inbound
 spill enters near the top at the **same horizontal position** it left, so a stream leaving one
 corner arrives in the corresponding corner and reads as a pour rather than a teleport.
 
-Blocked on A only for the chroma field on a spilled particle. Everything else is independent.
+Unblocked: A landed, so a spilled particle has dye to carry.
 
-### C. Orientation gate, edge lines, glyphs — **agent, ready now**
+### C. Orientation gate, edge lines, glyphs — **DONE** (`773dede`)
 
 A `BeakerOverlay` drawing into the accumulation buffers after the fluid, so it composites through
 the same `resolve`. Needs a 3x5 bitmap font — there is none — for about ten characters, as a
 `const` table. The gate is a latch: armed on entering the mode, released the first time gravity is
 within tolerance of the cube's own down axis, never re-armed.
 
-**Ready now** because it is new files plus one small `Renderer` hook, and touches nothing A does.
-See `M4-C-HANDOFF.md`.
+**DONE** — `773dede`. `BeakerOverlay`, `OrientationGate`, a 45-glyph 3x5 font, 16 tests, and two
+inline hooks in `Renderer.h` (`addAccum` for weight, additive; `setAccum` for dye, overwriting).
+The overlay is an explicit call between `accumulate()` and `resolve()`, not part of
+`Simulation::render()`, which is why the pixel golden is unmoved. See `DECISIONS.md` D48-D52.
 
-### D. Chaining over ESP-NOW — *agent, blocked on B*
+### D. Chaining over ESP-NOW — **mine, in progress**
 
 Radio on the master only (`DECISIONS.md` D34). Spill packets are tiny and neither latency- nor
 loss-critical, but a dropped packet in a closed loop silently drains total volume — so carry a
@@ -123,21 +137,18 @@ Five jumper wires. See `SPI-HANDOFF.md`.
 ## 4. Order, and why
 
 ```
-   A (mine) ────────┬──> B ──> D
-                    │         
-   C (agent, now) ──┴──> E
-   F (agent, now, needs wiring)
+   A (done) ────────┬──> B (agent, now) ──> E
+                    │
+   C (done) ────────┘    D (mine, now, meets B at the spill packet)
+   F (agent, needs wiring)
 ```
 
-**A first** because B, D and E all carry chroma, and because if the split-kernel look is wrong it
-is better to find that before three items are built on it.
+A and C are in. **B and D run alongside each other**, meeting at one shared type — the spill
+packet — which D defines in `core/` so both ends agree on it rather than converging by accident.
+B produces those packets and consumes them; D carries them between cubes.
 
-**C and F run alongside A from the start.** C is new files plus a hook; F is `platform/esp32` only.
-Neither touches what A touches.
-
-Handoffs for **B, D and E are deliberately not written yet.** A handoff for work whose foundation
-does not exist would be speculative about the interfaces it must use, and this project has a
-documented habit of that going wrong. They follow when A and B land.
+E stays unwritten until B lands, because a browser handoff whose spill interface does not exist yet
+would be speculative about the thing it is mostly made of.
 
 ---
 

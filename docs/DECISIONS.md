@@ -864,6 +864,41 @@ Filed as a decision rather than a note because the shape is the project's own: *
 silently describes the wrong thing is worse than one that fails**, and both of these produce a
 plausible number with no error anywhere.
 
+### D51. The overlay classifies faces by normal, not by panel index **[STANDS]**
+
+`Geometry::cube` happens to put the top face at index 5, and nothing may rely on that. A display
+node drives an arbitrary subset of the six-panel table, and the table is built from specs rather
+than hardcoded, so `BeakerOverlay::init` classifies each panel by `dot(objectUp, panel.n)` — the
+inward normal of the top face points *down* — and derives the panel-space direction of "up" from
+`dot(objectUp, u)` and `dot(objectUp, v)`.
+
+That is what makes an arrow point the right way on a face whose "up" runs along its `i` axis rather
+than its `j` axis, and it is why the overlay silently skips the four faces a two-face display node
+does not own instead of scribbling into a slot it does not have.
+
+Same reasoning as the mount table and `AxisMap` (D8): a physical fact about the object belongs in
+one place that is derived, not in an index that happens to be right today.
+
+### D52. A tier that compiles out its channels cannot draw a second colour **[STANDS]**
+
+Found by building the beaker overlay against the tier it is for. `PARTSIM_TIER_BEAKER` compiles out
+sand and heat, which was the point — 27.4 KB — and that leaves **exactly one accumulation channel**.
+`resolve()` maps it through the water ramp, so every overlay texel resolves to the same colour:
+white edge lines correct, the orientation gate's **red arrows white**.
+
+No code in the overlay can fix that. One scalar and one ramp cannot express two colours, so it is a
+missing channel rather than a missing branch — which is why the finding was reported as a request
+rather than worked around.
+
+The fix is that `PARTSIM_ENABLE_CHROMA` belongs in the tier itself, not in an environment that
+selects it: a beaker whose liquid has no colour cannot mix, and mixing is the feature. It costs
+26.6 KB of firmware (beaker 173,612 -> 200,252 B, 61% of the part) and buys the thing the tier
+exists for.
+
+The general shape is worth keeping: **a feature switch that saves memory can remove a capability
+something else silently depends on**, and the way that surfaced was building the dependent feature
+against the real configuration rather than against the host default.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A
