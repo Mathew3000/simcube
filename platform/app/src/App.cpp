@@ -14,6 +14,35 @@ namespace app {
 #pragma GCC diagnostic ignored "-Wdouble-promotion"
 
 bool App::begin(Role role) {
+  // The Platform contract, checked rather than trusted.
+  //
+  // Platform.h states that display, imu and link are never null -- a platform with no such device
+  // passes the Null implementation -- and App then dereferences them unguarded in 18 places. Every
+  // member nevertheless defaults to nullptr, so `Platform{&console}` compiles and leaves five of
+  // them unset. Both platforms today populate all six, so this cannot fire; it exists for the
+  // THIRD one, which is the entire reason the seam was built, and where a forgotten member would
+  // otherwise surface as a null dereference somewhere far from the omission.
+  if (!plat_.console) return false;  // nothing to report a diagnostic through
+  {
+    Console& c0 = *plat_.console;
+    const struct {
+      const void* p;
+      const char* name;
+    } required[] = {{plat_.clock, "clock"},
+                    {plat_.display, "display"},
+                    {plat_.imu, "imu"},
+                    {plat_.link, "link"},
+                    {plat_.hooks, "hooks"}};
+    bool ok = true;
+    for (const auto& r : required)
+      if (!r.p) {
+        c0.printf("FATAL: Platform.%s is null -- pass the Null implementation, not a null pointer\n",
+                  r.name);
+        ok = false;
+      }
+    if (!ok) return false;
+  }
+
   Console& c = *plat_.console;
   role_ = role;
 

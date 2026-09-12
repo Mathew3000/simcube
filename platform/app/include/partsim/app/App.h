@@ -136,6 +136,17 @@ class App {
     SystemHooks* hooks;
   };
 
+  // A REFERENCE, and deliberately not a copy.
+  //
+  // A platform may rebind a device after App is constructed, and one does: the ESP32's setup()
+  // builds App early (it owns ~137KB of pools, so it is a global) and only later discovers whether
+  // SPI came up, assigning g_plat.link to the real transport or leaving the Null one. Holding a
+  // reference is what makes that visible here.
+  //
+  // Changing this to a by-value Platform compiles, passes every test, and silently breaks it: each
+  // display node would keep the NullFrameLink and never receive a frame, with no warning printed
+  // because SpiFrameLink::begin() succeeded. Nothing else in the file depends on the aliasing, so
+  // the hazard is entirely in how reasonable the change looks.
   const Platform& plat_;
 
   // Simulation state, strictly by role.

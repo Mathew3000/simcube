@@ -598,6 +598,26 @@ Recorded so they are not silently relitigated. All **[USER]**.
   above at the matching horizontal position; the orientation gate arms **once** on entering the
   mode and never re-arms, because tilting is how you pour.
 
+### D43. The Platform contract is checked, and the aliasing is documented **[STANDS]**
+
+Two review findings on the W3 HAL, neither reachable at the time and both cheap.
+
+`Platform` documents that `display`, `imu` and `link` are never null — a platform with no such
+device passes the Null implementation — and `App` then dereferences them unguarded in **18 places**.
+But every member defaults to `nullptr`, so `Platform{&console}` compiles and leaves five unset.
+Both platforms today populate all six positionally, so nothing could fire; the check exists for the
+**third** platform, which is the entire reason the seam was built. Verified by omitting one member
+and watching `app_golden` fail with the member named.
+
+And `App` holds `const Platform&` rather than a copy, which is load-bearing: the ESP32's `setup()`
+constructs `App` early (it owns ~137 KB of pools) and only later discovers whether SPI came up,
+assigning `g_plat.link` to the real transport. **Changing that reference to a by-value copy
+compiles, passes every test, and silently leaves every display node on the NullFrameLink** — with
+no warning printed, because `SpiFrameLink::begin()` succeeded. The hazard is entirely in how
+reasonable the change looks, so the reason lives on the member declaration.
+
+Zero SRAM cost: every one of the eight firmware environments is byte-identical afterwards.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A
