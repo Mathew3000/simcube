@@ -586,7 +586,8 @@ inherited-from-an-invalidated-premise shape as R5.
 
 Both halves shipped. The floor went 28.67 -> 22.69 ms at 384 particles; see F2 for the table, D45
 for the one design choice worth arguing with, F5 for why the splat half came in at a third of its
-estimate, and `W5-FINDINGS.md` for the full measurements.
+estimate; the rejected variants and their numbers are in the commit messages for `62d3751` and
+`b78cf13`.
 
 Blit 11.10 -> 6.49 ms. The premise needed correcting first: the cost was attributed to *scattered*
 read-modify-writes, and rewriting the inner loop to write every texel to (0, 0) moved the blit by
@@ -839,6 +840,29 @@ configuration. Fixed by tracking whether any row was actually compared and retur
 The general form is worth keeping: **a self-test that can silently test nothing is worse than no
 self-test**, because the thing it licenses — here, reading a third-party private member — is
 accepted on the strength of it.
+
+### D47. Two build traps that silently measure the wrong tree **[STANDS]**
+
+Both found by W5 after they had already voided measurements, and neither is discoverable from a
+failure — the build succeeds and the number is simply about something else.
+
+**`symlink://` libraries remember an absolute path.** `.pio/libdeps/<env>/core.pio-link` records
+the working directory it was resolved from. Copying `libdeps` between checkouts — which is the
+documented dodge for the `HTTPClientError` on a new environment — therefore makes the new checkout
+compile the **old** checkout's `core/` and `platform/app/`. The giveaway was a probe that deleted
+the entire splat inner loop and changed the measured splat by 0.00 ms.
+
+So when seeding `libdeps` from another env or checkout, keep only the HUB75 directory and delete
+`core.pio-link`, `app.pio-link` and `integrity.dat`. Those are the parts worth not re-fetching; the
+links are not.
+
+**`PLATFORMIO_BUILD_FLAGS` does not reach `symlink://` libraries.** It applies to `src/` only. A
+probe `#if` in `core/` therefore compiles to nothing, the build succeeds, and the result looks like
+a measurement rather than like a flag that never arrived. Edit the source for a core probe.
+
+Filed as a decision rather than a note because the shape is the project's own: **a measurement that
+silently describes the wrong thing is worse than one that fails**, and both of these produce a
+plausible number with no error anywhere.
 
 ### D41. Commits carry no attribution trailer **[USER]**
 

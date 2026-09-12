@@ -506,7 +506,7 @@ follow it -- left absolute, coarser particles stop overlapping and the fluid rea
 1. **Sustained octal PSRAM bandwidth** under concurrent CPU load. Decides whether six faces on one
    board is real.
 2. **Row-walking blit cost in PSRAM.** The internal-SRAM half is now measured: 11.10 → 6.49 ms at
-   six 32×32 faces, of which 3.13 is `resolve` and ~2.9 is the pixel pushing itself (`W5-FINDINGS.md`).
+   six 32×32 faces, of which 3.13 is `resolve` and ~2.9 is the pixel pushing itself (commit `62d3751`).
    The per-texel path is known unviable in PSRAM and the row writer now exists, so what is left is
    to run it against a PSRAM framebuffer at 64×64.
 3. **Achieved refresh** at 128×64 and 384×64, 6-bit. The 141 Hz measured on a 192×32 chain will

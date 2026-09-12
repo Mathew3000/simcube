@@ -605,7 +605,8 @@ than the figure it used to quote for that reason.
 **The bottleneck has moved.** Splat + blit is a **22.69 ms floor at 384 particles that no processor
 removes**, capping the frame at 44.1 fps however fast the solver gets. Widening the blob to hide the
 coarse lattice (§4) is what put it there; it bought the look and it moved the bottleneck. An
-ESP32-P4 is ~1.7× on the solver and therefore buys a few fps.
+ESP32-P4 is ~2.3× on the solver (`CUBE-PCB.md` §6.2, from a measured instruction-count ratio)
+and therefore buys a few fps.
 
 The floor was 28.67 ms until the two software levers named here were built — the circular splat
 bound and the row-walking blit, `DECISIONS.md` P3. **Splat is now three quarters of what remains**,

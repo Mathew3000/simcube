@@ -399,20 +399,23 @@ required throughput = particles x substeps_per_frame x target_fps
 ```
 
 Measured baseline, so the multipliers below mean something: an **ESP32-S3 at 240 MHz delivers
-5 849 particle-steps/s** (87.54 ms for 512 particles, one step, after the divide-free solver
-landed — see RESOURCES.md §5.1).
+6 859 particle-steps/s** — 74.65 ms for 512 particles, one step, with the solver's hazard-free
+passes on the second core (DECISIONS.md D44). It was 5 849 before that landed, and every multiplier
+below moved with it; see RESOURCES.md §5.1.
 
 | tier | `d` | representative scene | particles | needed | **vs S3** | solver working set |
 |---|---|---|---|---|---|---|
-| `lite` | 4.0 | water tank | 158 | 9 480/s | **2x** | 28 KB |
-| `cube` | 3.0 | water tank | 375 | 22 500/s | **4x** | 65 KB |
-| `beaker` | 2.5 | half-full beaker | 1 049 | 62 940/s | **11x** | 177 KB |
-| `future` | 1.0 | half-full beaker | 16 384 | 983 040/s | **168x** | 2.7 MB |
-| `max` | 0.5 | half-full beaker, 60 fps | 131 072 | 15 728 640/s | **2 689x** | 38 MB |
+| `lite` | 4.0 | water tank | 158 | 9 480/s | **1.4x** | 28 KB |
+| `cube` | 3.0 | water tank | 375 | 22 500/s | **3.3x** | 65 KB |
+| `beaker` | 2.5 | half-full beaker | 1 049 | 62 940/s | **9.2x** | 177 KB |
+| `future` | 1.0 | half-full beaker | 16 384 | 983 040/s | **143x** | 2.7 MB |
+| `max` | 0.5 | half-full beaker, 60 fps | 131 072 | 15 728 640/s | **2 293x** | 38 MB |
 
-All at two substeps per frame and 30 fps except `max`. **Note what the first two rows say: the
-cube as it ships today needs 4x an S3 to hit 30 fps, and does not have it.** That is not a
-rounding error to design around later; it is the headline requirement.
+All at two substeps per frame and 30 fps except `max`. **Note what the first two rows say: `lite`
+is essentially there — measured live at 26.3 fps on a real scene — and `cube` still needs 3.3x an
+S3 and does not have it.** That gap is the headline requirement, and the software levers are spent:
+coarser particles, the neighbour cache, the divide-free solver, the second core, the row-walking
+blit and the splat bound together bought about 12x, and nothing of that size is left.
 
 Working set is solver-only — particles, neighbour cache, sort grid, heat field. It excludes the
 accumulation buffers and the DMA framebuffer, which live on the display boards.

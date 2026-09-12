@@ -207,7 +207,8 @@ is exact rather than approximate and so cannot move a pixel. It came in at 7.8% 
 **A third commit came out of it**: the panels were being sent a brightness ramp that wrapped three
 times above input 144, invisible to every hash and to a board with no panels attached. F6.
 
-Full measurements, including the variants that were tried and rejected, in `W5-FINDINGS.md`.
+Full measurements, including the variants tried and rejected, in the commit messages for
+`62d3751` (blit) and `b78cf13` (splat bound).
 
 ---
 
