@@ -125,6 +125,10 @@ int encodeFrame(const FrameHeader& hdr, ParticleView p, HeatView f, const Aabb& 
   const float invx = 1.0f / size.x, invy = 1.0f / size.y, invz = 1.0f / size.z;
 
   const int n = p.n;
+  // Refuse rather than truncate. The header carries the count as uint16, so a larger pool would
+  // silently wrap and the receiver would decode a fraction of the fluid as if it were all of it --
+  // which looks like particles vanishing, not like a protocol error. See kMaxFrameParticles.
+  if (n > kMaxFrameParticles) return 0;
   const int bodyStart = kFrameHeaderBytes;
   if (bodyStart + n * kFrameBytesPerParticle > cap) return 0;
 
@@ -149,6 +153,7 @@ int encodeFrame(const FrameHeader& hdr, ParticleView p, HeatView f, const Aabb& 
   }
 
   // Header last, so heatBytes is known, then the checksum over everything before it.
+  // n was bounded above; the cast is safe because encodeFrame refused a larger pool up front.
   put16(out + 0, kFrameMagic);
   out[2] = kFrameVersion;
   out[3] = hdr.flags;
@@ -185,7 +190,15 @@ bool decodeFrame(const uint8_t* in, int len, const Aabb& box, uint16_t expectGeo
   // disagree about panel size or pitch and every particle would land in the wrong place -- which
   // looks like a physics bug and is not one.
   if (h.geomHash != expectGeomHash) return false;
-  if (h.particles > kMaxParticles) return false;
+  // The receiving pool may be smaller than the format allows, and then this is a real bound. When
+  // the pool is the LARGER of the two, a uint16 count cannot exceed it by construction and the
+  // comparison is a tautology the compiler rejects under -Werror -- so compile it out rather than
+  // writing a check that only looks like one.
+  constexpr int kDecodeCeiling =
+      kMaxParticles < kMaxFrameParticles ? (int)kMaxParticles : kMaxFrameParticles;
+  if constexpr (kDecodeCeiling < kMaxFrameParticles) {
+    if ((int)h.particles > kDecodeCeiling) return false;
+  }
 
   const int bodyStart = kFrameHeaderBytes;
   const int particleBytes = (int)h.particles * kFrameBytesPerParticle;

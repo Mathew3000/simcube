@@ -155,8 +155,26 @@ constexpr int kMaxGridCells = PARTSIM_MAX_GRID_CELLS;
 constexpr int kMaxFieldCells = PARTSIM_MAX_FIELD_CELLS;
 constexpr int kMaxEmitters = 4;
 
-// Particle indices are stored as uint16 in the sort/index arrays.
-static_assert(kMaxParticles <= 65535, "particle indices are uint16");
+// Particle indices widen with the pool rather than capping it.
+//
+// The point is that the capability ladder stays open at the top. A pool of 65535 is far beyond any
+// MCU measured here -- an eighth of that is already seconds per step on a 1 GHz Cortex-M7 -- but
+// the ceiling should be a property of the hardware, not of a type chosen years earlier. The host
+// build is where a future configuration gets validated before the silicon to run it exists.
+//
+// Below 65536 this is uint16 exactly as before, so nothing changes for anything that ships today:
+// SpatialHash's arrays and the neighbour cache keep their current size and the golden hashes do
+// not move. Hand-rolled rather than std::conditional because core/ includes no <type_traits>.
+template <bool Wide>
+struct ParticleIndexFor {
+  using type = uint16_t;
+};
+template <>
+struct ParticleIndexFor<true> {
+  using type = uint32_t;
+};
+using ParticleIndex = typename ParticleIndexFor<(kMaxParticles > 65535)>::type;
+static_assert(kMaxParticles <= 4294967295u, "particle indices are at most uint32");
 
 // --- world units -----------------------------------------------------------
 // The simulated volume is ALWAYS this many world units on a side, whatever the panel resolution.

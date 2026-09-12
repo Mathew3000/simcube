@@ -8,19 +8,19 @@ bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch) {
 
   const int n = p.n;
   for (int c = 0; c < cellCount_; ++c) start_[c] = 0;
-  start_[cellCount_] = (uint16_t)n;
+  start_[cellCount_] = (ParticleIndex)n;
   if (n == 0) return true;
 
   // Pass 1: per-cell counts.
   for (int i = 0; i < n; ++i) ++start_[v.cellIndexOf(p.pred(i))];
 
   // Pass 2: inclusive prefix sum, so start_[c] is now the END offset of cell c.
-  uint16_t sum = 0;
+  ParticleIndex sum = 0;
   for (int c = 0; c < cellCount_; ++c) {
-    sum = (uint16_t)(sum + start_[c]);
+    sum = (ParticleIndex)(sum + start_[c]);
     start_[c] = sum;
   }
-  start_[cellCount_] = (uint16_t)n;
+  start_[cellCount_] = (ParticleIndex)n;
 
   // Pass 3: place by pre-decrementing, which walks each cell's slots backwards and leaves
   // start_[c] holding the cell's BEGIN offset -- so no separate cursor array is needed and
@@ -28,7 +28,7 @@ bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch) {
   // cell come out ascending, which the deterministic gather order depends on.
   for (int i = n - 1; i >= 0; --i) {
     const int c = v.cellIndexOf(p.pred(i));
-    idx_[--start_[c]] = (uint16_t)i;
+    idx_[--start_[c]] = (ParticleIndex)i;
   }
 
   // Pass 4: permute every array into cell order so the neighbour gather streams.
@@ -68,7 +68,7 @@ void SpatialHash::buildNeighbours(const SimVolume& v, const Particles& p) {
   const int n = p.n;
   truncated_ = 0;
   for (int i = 0; i < n; ++i) {
-    uint16_t* out = list_ + (unsigned)i * (unsigned)kMaxNeighbours;
+    ParticleIndex* out = list_ + (size_t)i * (size_t)kMaxNeighbours;
     const Vec3 pi = p.pred(i);
     int c = 0;
     bool full = false;
@@ -76,7 +76,7 @@ void SpatialHash::buildNeighbours(const SimVolume& v, const Particles& p) {
       if (j == i) return;
       if (length2(p.pred(j) - pi) >= h2) return;
       if (c >= kMaxNeighbours) { full = true; return; }
-      out[c++] = (uint16_t)j;
+      out[c++] = (ParticleIndex)j;
     });
     count_[i] = (uint8_t)c;
     if (full) ++truncated_;

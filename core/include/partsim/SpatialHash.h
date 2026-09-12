@@ -1,4 +1,6 @@
 #pragma once
+#include <cstddef>
+
 #include "partsim/Particles.h"
 #include "partsim/SimVolume.h"
 
@@ -30,7 +32,9 @@ class SpatialHash {
 #if PARTSIM_NEIGHBOUR_CACHE
   // Neighbours of particle i within kSmoothRadius, in gather order, self excluded. Valid until
   // the next build(); indices are into the PERMUTED arrays, which build() has already produced.
-  const uint16_t* neighbours(int i) const { return list_ + (unsigned)i * (unsigned)kMaxNeighbours; }
+  const ParticleIndex* neighbours(int i) const {
+    return list_ + (std::size_t)i * (std::size_t)kMaxNeighbours;
+  }
   int neighbourCount(int i) const { return (int)count_[i]; }
   // Particles whose list hit kMaxNeighbours and lost their furthest neighbours. Zero across every
   // scene as configured; a non-zero value here is the signal to raise the cap, not a fault.
@@ -47,10 +51,10 @@ class SpatialHash {
 
   int cellCount_ = 0;
   // start_[c] is the first slot of cell c; start_[cellCount_] == n. cellCount_+1 entries.
-  uint16_t start_[kMaxGridCells + 1];
-  uint16_t idx_[kMaxParticles];
+  ParticleIndex start_[kMaxGridCells + 1];
+  ParticleIndex idx_[kMaxParticles];
 #if PARTSIM_NEIGHBOUR_CACHE
-  uint16_t list_[(unsigned)kMaxParticles * (unsigned)kMaxNeighbours];
+  ParticleIndex list_[(std::size_t)kMaxParticles * (std::size_t)kMaxNeighbours];
   uint8_t count_[kMaxParticles];
   int truncated_ = 0;
 #endif
@@ -89,7 +93,7 @@ inline void forEachNear(const SimVolume& v, const SpatialHash& h, const Particle
 #if PARTSIM_NEIGHBOUR_CACHE
   (void)v;
   (void)p;
-  const uint16_t* nb = h.neighbours(i);
+  const ParticleIndex* nb = h.neighbours(i);
   const int c = h.neighbourCount(i);
   for (int k = 0; k < c; ++k) fn((int)nb[k]);
 #else

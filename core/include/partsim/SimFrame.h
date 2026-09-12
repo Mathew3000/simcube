@@ -3,6 +3,15 @@
 
 namespace partsim {
 
+// The wire format carries the particle count as uint16, so this is the most a frame can describe.
+//
+// Deliberately NOT widened to match kMaxParticles. The format exists for the three-node cube over
+// SPI at ~21 KB/frame; a pool past 65535 would be 650 KB per frame and the broadcast transport is
+// not the right answer at that scale anyway. A configuration that large is a single-node or
+// host-side one, where no frame is encoded at all. encodeFrame refuses rather than truncating.
+constexpr int kMaxFrameParticles = 65535;
+
+
 // The wire format between the simulation master and the display nodes.
 //
 // Lives in core/, like MotionSource and ChainMap, for the same reason: it must be byte-identical
