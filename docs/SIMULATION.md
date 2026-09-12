@@ -6,7 +6,8 @@ This is a description of what the code does, not of what it should do. Where a c
 chosen by measurement the measurement is given, because those are the numbers that go stale
 first. Where something is an approximation it says so.
 
-Companion documents: [`RESOURCES.md`](RESOURCES.md) for the per-role memory and CPU budget and the
+Companion documents: [`DECISIONS.md`](DECISIONS.md) for why each choice was made,
+[`RESOURCES.md`](RESOURCES.md) for the per-role memory and CPU budget and the
 hardware measurements, [`CUBE-PCB.md`](CUBE-PCB.md) for the board.
 
 ---
