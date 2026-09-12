@@ -24,6 +24,7 @@
 #include <cstring>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_now.h>
 #include <esp_wifi.h>
 
 #include "Lsm6dsox.h"
@@ -209,11 +210,24 @@ void setup() {
   g_console.println("build: cube-fast -- FMA contraction on, determinism check will NOT match");
 #endif
 
-  // Radio off before anything else claims memory. WiFi and BT together cost ~55KB of internal
-  // heap, add ISR jitter to a display clocked at 16MHz, and would be degraded by the panels'
-  // own emissions in any case. Nothing here needs a network.
+  // Radio off before anything else claims memory, EXCEPT on a node that chains beakers.
+  //
+  // The ~55KB this is said to cost is a HEAP figure and the linker cannot see it: building with
+  // WiFi STA and esp_now_init() moves the static total by 68 bytes, because WiFi allocates its
+  // buffers at esp_wifi_init(). So the cost has to be read off a running board, and
+  // PARTSIM_ENABLE_RADIO exists to make that measurable rather than assumed.
+  //
+  // Display nodes stay silent whatever the flag says: they sit inside the panel stack where HUB75
+  // emissions are worst, they are the boards with the tightest budget, and a radio ISR against a
+  // 16MHz display clock is the jitter this project spent M2 avoiding (DECISIONS.md D34).
+#if PARTSIM_ENABLE_RADIO && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();  // STA for the PHY, not for an access point
+  if (esp_now_init() != ESP_OK) g_console.println("WARNING: esp_now_init failed; no chaining");
+#else
   WiFi.mode(WIFI_OFF);
   esp_wifi_deinit();
+#endif
 #if CONFIG_BT_ENABLED
   btStop();
 #endif

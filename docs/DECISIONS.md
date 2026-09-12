@@ -899,6 +899,31 @@ The general shape is worth keeping: **a feature switch that saves memory can rem
 something else silently depends on**, and the way that surfaced was building the dependent feature
 against the real configuration rather than against the host default.
 
+### D53. The radio costs 30 KB, not the 55 the budget was built on **[STANDS]**
+
+M2 turned WiFi and Bluetooth off for three reasons: ~55 KB of internal heap, ISR jitter against a
+16 MHz display clock, and panel emissions degrading the antenna. The second and third stand. The
+first was an estimate, and beaker-mode chaining needs the radio back, so it was measured.
+
+**The linker cannot see this cost at all.** Building the master with `WiFi.mode(WIFI_STA)` and
+`esp_now_init()` moves the static total by **68 bytes**, because WiFi allocates its buffers from the
+heap at init. A budget check that reads the map file therefore reports the radio as free, which is
+the opposite of useful. It has to come off a running board:
+
+| | free internal heap | free PSRAM |
+|---|---|---|
+| radio off | 176,464 B | 8,385,791 B |
+| WiFi STA + ESP-NOW | 145,316 B | 8,371,691 B |
+| **cost** | **31,148 B (30.4 KB)** | 14,100 B (13.8 KB) |
+
+So 30.4 KB, and the estimate was 1.8x too high. The master keeps **145 KB of heap free** with the
+radio up, against a chaining protocol that needs a few. Beaker chaining fits comfortably, and the
+figure that made it look marginal was never measured.
+
+`PARTSIM_ENABLE_RADIO` is off by default and is ignored entirely on a display node, whatever it is
+set to: those boards sit inside the panel stack where the emissions are worst, they carry the
+tightest budget, and D34's other two objections apply to them unchanged.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A

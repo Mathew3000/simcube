@@ -443,6 +443,13 @@ static_assert(kMaxNeighbours <= 255, "per-particle neighbour counts are uint8");
 #define PARTSIM_ENABLE_CHROMA 0
 #endif
 
+// The radio, for chaining beakers between cubes over ESP-NOW. Off by default: M2 turned WiFi off
+// for ~55KB of heap and for ISR jitter against a 16MHz display clock, and nothing but chaining has
+// ever wanted it back.
+#ifndef PARTSIM_ENABLE_RADIO
+#define PARTSIM_ENABLE_RADIO 0
+#endif
+
 // Material ids stay contiguous from 0, so kMaterialCount is the table size either way and
 // Solver::defaultMaterials indexes it directly.
 enum Material : uint8_t {
