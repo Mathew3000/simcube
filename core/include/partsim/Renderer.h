@@ -125,6 +125,46 @@ class Renderer {
     return accum_[slot][(j * width_[slot] + i) * kChannelCount + channel];
   }
 
+  // Additive write into the accumulation buffer -- the hook BeakerOverlay composites through.
+  //
+  // The overlay runs AFTER the fluid has splatted and BEFORE resolve(), so it goes through the
+  // same palette path the fluid does and there is no second colour pipeline to keep in step.
+  // That is the whole reason it writes here rather than into pixels.
+  //
+  // ADDITIVE, not assignment: an overlay that assigned would punch a hole in bright fluid
+  // wherever it wrote a value dimmer than what was already there, so an edge line would flicker
+  // dark exactly where the liquid touches it. Saturates at the accumulator's 16 bits.
+  //
+  // Bounds-checked on i, j and channel, unlike the splat loop: the splat's footprint is clamped
+  // by construction, whereas overlay coordinates are computed from panel dimensions, and an
+  // off-by-one there would silently scribble into the next panel's buffer.
+  void addAccum(int panel, int i, int j, int channel, int value) {
+    if (!rendersPanel(panel) || value <= 0) return;
+    const int slot = slotOf_[panel];
+    const int w = width_[slot];
+    const int h = (w > 0) ? texels_[slot] / w : 0;
+    if (i < 0 || i >= w || j < 0 || j >= h) return;
+    if (channel < 0 || channel >= kChannelCount) return;
+    uint16_t& cell = accum_[slot][(j * w + i) * kChannelCount + channel];
+    cell = (uint16_t)imin(65535, (int)cell + value);
+  }
+
+  // Overwriting write, for the overlay's CHROMA channels only.
+  //
+  // Weight is additive because brightness must never go down where the overlay draws; dye is not,
+  // because resolve() takes the RATIO of the chroma channels, so adding red to the blue dye
+  // already in a texel gives a magenta glyph over a full beaker and a red one over an empty
+  // one. A glyph's colour is its own statement, not a mixture with whatever it covers.
+  void setAccum(int panel, int i, int j, int channel, int value) {
+    if (!rendersPanel(panel)) return;
+    const int slot = slotOf_[panel];
+    const int w = width_[slot];
+    const int h = (w > 0) ? texels_[slot] / w : 0;
+    if (i < 0 || i >= w || j < 0 || j >= h) return;
+    if (channel < 0 || channel >= kChannelCount) return;
+    accum_[slot][(j * w + i) * kChannelCount + channel] = (uint16_t)iclamp(value, 0, 65535);
+  }
+
   // Texels and width of a driven panel, so a caller iterating pixels never has to assume either.
   int panelTexels(int panel) const { return rendersPanel(panel) ? texels_[slotOf_[panel]] : 0; }
   int panelWidth(int panel) const { return rendersPanel(panel) ? width_[slotOf_[panel]] : 0; }
@@ -157,6 +197,13 @@ class Renderer {
   // Kernel half-width in texels, derived from kSplatRadiusWorld and the panel pitch in init().
   // At pitch 1.0 this is 2, the value it used to be hardcoded to.
   int footprint_ = 2;
+#if PARTSIM_ENABLE_CHROMA
+  // Kernel-LUT index at the chroma radius: a texel is inside the narrow disc when its kq is below
+  // this, so the test is one compare on a value the weight splat has already computed.
+  int chromaKq_ = 0;
+  // Dye for one texel, inside the narrow disc only. Defined next to the splat loop it belongs to.
+  void splatChroma(uint16_t* row, int ii, int kq, int contrib, int cr, int cg);
+#endif
 
   uint16_t accum_[kMaxRenderPanels][kMaxPanelTexels * kChannelCount];
 #if PARTSIM_INTERNAL_PIXELS

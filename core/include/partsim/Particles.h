@@ -34,6 +34,17 @@ struct Particles {
 
   uint8_t mat[kMaxParticles];
 
+#if PARTSIM_ENABLE_CHROMA
+  // Dye carried by the particle, as a point on the hue simplex in 8.8 fixed point: blue is implied
+  // as kChromaOne - cr - cg, so red is (kChromaOne, 0), green (0, kChromaOne), blue (0, 0) and
+  // magenta (kChromaOne/2, 0). Two components rather than three because mixing is a convex lerp,
+  // which preserves cr + cg <= kChromaOne -- the implied one can never go negative.
+  //
+  // Fixed point, not a byte: see kChromaOne in Config.h for the measurement that forced it.
+  uint16_t cr[kMaxParticles];
+  uint16_t cg[kMaxParticles];
+#endif
+
   int32_t n = 0;
 
   void clear() { n = 0; }
@@ -46,6 +57,10 @@ struct Particles {
     sx[i] = p.x; sy[i] = p.y; sz[i] = p.z;
     lam[i] = 0.0f;
     mat[i] = material;
+#if PARTSIM_ENABLE_CHROMA
+    cr[i] = 0;  // blue; setChroma or the scene overrides it
+    cg[i] = 0;
+#endif
     return true;
   }
 
@@ -58,6 +73,10 @@ struct Particles {
     vx[i] = vx[last]; vy[i] = vy[last]; vz[i] = vz[last];
     sx[i] = sx[last]; sy[i] = sy[last]; sz[i] = sz[last];
     lam[i] = lam[last];
+#if PARTSIM_ENABLE_CHROMA
+    cr[i] = cr[last];
+    cg[i] = cg[last];
+#endif
     mat[i] = mat[last];
   }
 

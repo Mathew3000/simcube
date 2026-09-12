@@ -76,6 +76,13 @@ bool Renderer::init(const Geometry& g, const int* panels, int count) {
   const float rMax = kSplatRadiusWorld / pitch;  // texels
   footprint_ = imax(1, (int)rMax);
   kernelScale_ = (float)kKernelSize / (rMax * rMax);
+#if PARTSIM_ENABLE_CHROMA
+  // The chroma disc, expressed in the SAME LUT index the weight splat already computes, so the
+  // narrow test is one compare rather than a second distance.
+  const float rc = kChromaRadiusWorld / pitch;
+  chromaKq_ = (int)(rc * rc * kernelScale_);
+  if (chromaKq_ > kKernelSize) chromaKq_ = kKernelSize;
+#endif
   for (int q = 0; q <= kKernelSize; ++q) {
     const float r2 = (float)q / kernelScale_;
     const float t = 1.0f - r2 / (rMax * rMax);
@@ -94,6 +101,25 @@ void Renderer::clear() {
   }
 }
 
+#if PARTSIM_ENABLE_CHROMA
+// Dye for one texel, premultiplied by the kernel weight, inside the narrow disc only.
+//
+// `row` is already offset to this particle's WEIGHT channel, so the chroma channels are reached
+// relative to it -- which keeps the hot loop free of a second base pointer.
+//
+// Scaled by >>8 rather than /255. The S3's FPU has no divide and the integer one is not free
+// either, and it does not matter: resolve() takes the RATIO of these channels, so a common factor
+// of 255/256 cancels exactly. Blue is implied, so all three sum to the narrow weight and that sum
+// is the denominator resolve needs.
+void Renderer::splatChroma(uint16_t* row, int ii, int kq, int contrib, int cr, int cg) {
+  if (kq >= chromaKq_) return;
+  uint16_t* c = row + (size_t)ii * kChannelCount - (size_t)kChWater;
+  c[kChCR] = satAdd(c[kChCR], (contrib * cr) >> 8);
+  c[kChCG] = satAdd(c[kChCG], (contrib * cg) >> 8);
+  c[kChCB] = satAdd(c[kChCB], (contrib * (255 - cr - cg)) >> 8);
+}
+#endif
+
 void Renderer::splat(ParticleView p, const Geometry& g) {
   const int n = p.n;
   const float dtOff = timeOffset_;
@@ -103,6 +129,11 @@ void Renderer::splat(ParticleView p, const Geometry& g) {
     const Vec3 pos{p.x[i], p.y[i], p.z[i]};
     const Vec3 q = (dtOff == 0.0f) ? pos : pos + Vec3{p.vx[i], p.vy[i], p.vz[i]} * dtOff;
     const int ch = channelOf(p.mat[i]);
+#if PARTSIM_ENABLE_CHROMA
+    // 8.8 down to 0..255 for the premultiply below; the low bits matter for MIXING, not
+    // for one texel of splat.
+    const int cr = p.cr[i] >> 8, cg = p.cg[i] >> 8;
+#endif
 
     // Brute force over the panels this node drives. With at most 8 of them the rejection test is
     // one dot product each, and any acceleration structure would cost more than it saves --
@@ -163,6 +194,9 @@ void Renderer::splat(ParticleView p, const Geometry& g) {
           if (contrib == 0) continue;
           uint16_t& cell = row[(size_t)ii * kChannelCount];
           cell = satAdd(cell, contrib);
+#if PARTSIM_ENABLE_CHROMA
+          splatChroma(row, ii, kq, contrib, cr, cg);
+#endif
         }
         for (int ii = ic - 1; ii >= i0; --ii) {
           const float dx = ((float)ii + 0.5f) - s;
@@ -172,6 +206,9 @@ void Renderer::splat(ParticleView p, const Geometry& g) {
           if (contrib == 0) continue;
           uint16_t& cell = row[(size_t)ii * kChannelCount];
           cell = satAdd(cell, contrib);
+#if PARTSIM_ENABLE_CHROMA
+          splatChroma(row, ii, kq, contrib, cr, cg);
+#endif
         }
       }
     }
@@ -210,10 +247,49 @@ void Renderer::resolve(int panel, uint8_t* out, int bytesPerTexel) const {
     int r = 0, gg = 0, b = 0;
     uint8_t c[3];
     const Palette& palB = fading ? *paletteB_ : pal;
+#if PARTSIM_ENABLE_CHROMA
+    // Colour is the RATIO of the chroma channels; brightness comes from the weight channel, which
+    // was splatted through the wider kernel. Keeping them separate is the whole point: the surface
+    // stays continuous at the weight radius while the dye stays sharp at half of it.
+    //
+    // The three chroma channels sum to the narrow disc's own accumulated weight, which is exactly
+    // the denominator this needs -- and it is why blue is stored rather than implied.
+    const uint16_t cR = src[i * kChannelCount + kChCR];
+    const uint16_t cG = src[i * kChannelCount + kChCG];
+    const uint16_t cB = src[i * kChannelCount + kChCB];
+    const int cSum = (int)cR + (int)cG + (int)cB;
+    if (aw && cSum > 0) {
+      // Brightness through the water ramp as usual, then tinted. A texel lit by the wide kernel but
+      // outside every particle's narrow disc has cSum == 0 and keeps the untinted ramp colour,
+      // which is the right answer for the faint outer glow: no particle is close enough to say
+      // what colour it is.
+      ramp(pal.water, palB.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
+      const int lum = (c[0] * 77 + c[1] * 151 + c[2] * 28) >> 8;
+      // One divide per LIT texel, not per channel. The shift is 8, not 16: the ratio wanted here
+      // is cX/cSum scaled to 0..256, and >>16 collapses it to the integer 0 or 1 -- which renders
+      // the fluid almost black, because a pure dye then contributes lum*3/256 instead of lum*3.
+      const int inv = 65536 / cSum;
+      r += (lum * 3 * (((int)cR * inv) >> 8)) >> 8;
+      gg += (lum * 3 * (((int)cG * inv) >> 8)) >> 8;
+      b += (lum * 3 * (((int)cB * inv) >> 8)) >> 8;
+    } else if (aw) {
+      // Lit by the weight kernel but outside every particle's chroma disc. Rendering it through
+      // the palette would assert a colour no particle claimed -- and at a narrow chroma radius that
+      // paints a fringe of undyed palette blue along the surface of a magenta pool, which reads as
+      // the colour floating on the fluid rather than being in it.
+      //
+      // Neutral at the same luminance instead: no particle is close enough to say what colour this
+      // texel is, and a white glow is what the outer tail of a splat actually looks like.
+      ramp(pal.water, palB.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
+      const int lum = (c[0] * 77 + c[1] * 151 + c[2] * 28) >> 8;
+      r += lum; gg += lum; b += lum;
+    }
+#else
     if (aw) {
       ramp(pal.water, palB.water, iclamp((int)((float)aw * toLevel), 0, 255), c);
       r += c[0]; gg += c[1]; b += c[2];
     }
+#endif
 #if PARTSIM_ENABLE_SAND
     if (as) {
       ramp(pal.sand, palB.sand, iclamp((int)((float)as * toLevel), 0, 255), c);

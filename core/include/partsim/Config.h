@@ -430,6 +430,13 @@ static_assert(kMaxNeighbours <= 255, "per-particle neighbour counts are uint8");
 #define PARTSIM_ENABLE_HEAT 1
 #endif
 
+// Per-particle colour, for beaker mode: liquid carries a dye that MIXES, so red poured into blue
+// converges to pink. Off by default -- it costs a particle array and two accumulation channels,
+// and no scene outside beaker mode has a use for it.
+#ifndef PARTSIM_ENABLE_CHROMA
+#define PARTSIM_ENABLE_CHROMA 0
+#endif
+
 // Material ids stay contiguous from 0, so kMaterialCount is the table size either way and
 // Solver::defaultMaterials indexes it directly.
 enum Material : uint8_t {
@@ -485,6 +492,41 @@ constexpr float kHeatInfluence = 24.0f;
 #endif
 constexpr float kSplatRadiusWorld =
     kRestSpacing * PARTSIM_SPLAT_RADIUS_NUM / PARTSIM_SPLAT_RADIUS_DEN;
+#if PARTSIM_ENABLE_CHROMA
+// Radius of the chroma splat, as a fraction of the weight splat's.
+//
+// This is the whole reason beaker mode is affordable. Colour resolution is set by the BLOB, not by
+// the particle: chroma splatted through the weight kernel smears over 2*d, giving 32/(2d) ~ 5
+// distinguishable colour regions across the entire cube at the shipping spacing, and red pouring
+// into blue would read as a handful of lumps converging rather than as mixing (DECISIONS.md F3).
+//
+// Brightness needs the wide kernel -- a narrower one breaks the continuous surface that coarsening
+// the particles was all about (D21). Colour does not. Splitting them doubles colour resolution to
+// 32/d at the SAME particle count, which is worth the 8x more particles it would otherwise take.
+#ifndef PARTSIM_CHROMA_RADIUS_FRAC
+#define PARTSIM_CHROMA_RADIUS_FRAC 0.5f
+#endif
+constexpr float kChromaRadiusWorld = kSplatRadiusWorld * PARTSIM_CHROMA_RADIUS_FRAC;
+
+// How fast dye equalises between neighbours, per step, riding the XSPH pass.
+#ifndef PARTSIM_COLOUR_DIFFUSION
+#define PARTSIM_COLOUR_DIFFUSION 0.35f
+#endif
+constexpr float kColourDiffusion = PARTSIM_COLOUR_DIFFUSION;
+
+// Chroma is stored as 8.8 fixed point -- 0..kChromaOne, where kChromaOne is 255 units scaled by
+// 256 -- rather than as a byte.
+//
+// A byte does not work, and the failure is total rather than marginal. Diffusion moves fractions
+// of a unit per particle per step: a lone red particle among blue loses 89 units in one step while
+// each of its ~26 neighbours gains 3.4, and truncating every one of those to an integer throws
+// away 0.4 each. Measured with uint8 storage: red dye fell 98% over 600 steps and blue rose 100%.
+// Dye must be conserved for a mix to converge on the right colour rather than on whatever the
+// rounding drifts toward, and 8 fractional bits put the per-step rounding 256x below the smallest
+// transfer that matters.
+constexpr int kChromaOne = 255 * 256;
+#endif
+
 constexpr int kAttenLutSize = 64;
 // Accumulated intensity that maps to the top of a colour ramp. Measured, not guessed: a dense
 // water texel peaks around 6500 at these kernel constants, and setting this too low clips
@@ -517,6 +559,20 @@ enum Channel : uint8_t {
 #endif
 #if PARTSIM_ENABLE_HEAT
   kChHeat,
+#endif
+#if PARTSIM_ENABLE_CHROMA
+  // Dye, splatted through a NARROWER kernel than the weight above (see kChromaRadiusWorld) and
+  // premultiplied by it. All three are stored rather than two with the third implied, because the
+  // colour a texel resolves to is chroma divided by the chroma channels' OWN total weight -- and
+  // that total is exactly kChCR + kChCG + kChCB. Imply one and the denominator becomes circular.
+  //
+  // The earlier M4 sketch reinterpreted the dead sand and heat channels to avoid a fourth, on the
+  // grounds that it cost +16KB on a display node then sitting at 200KB of 230. W1 made sand and
+  // heat compile out and that node now measures 115KB, so the constraint the hack existed for is
+  // gone and the channels can say what they mean.
+  kChCR,
+  kChCG,
+  kChCB,
 #endif
   kChannelCount
 };

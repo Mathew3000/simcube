@@ -53,7 +53,11 @@ void HeatBuffer::clear() {
 // --- adapters, so the full simulation feeds the same splat path -----------------------------
 
 ParticleView Particles::view() const {
+#if PARTSIM_ENABLE_CHROMA
+  return ParticleView{x, y, z, vx, vy, vz, mat, cr, cg, n};
+#else
   return ParticleView{x, y, z, vx, vy, vz, mat, n};
+#endif
 }
 
 HeatView FieldGrid::view() const {

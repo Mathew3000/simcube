@@ -330,15 +330,48 @@ void Solver::step(Particles& p, const SimVolume& v, SpatialHash& h, void* scratc
     if (c <= 0.0f) continue;
     const Vec3 pi = p.pos(i), vi = p.vel(i);
     Vec3 dv{0.0f, 0.0f, 0.0f};
+#if PARTSIM_ENABLE_CHROMA
+    // Dye equalises with the same neighbours and the same kernel weights the viscosity uses, so it
+    // rides this pass for the cost of two more accumulators. A separate loop would be a fourth full
+    // 27-cell gather per step for something that wants exactly the walk already in hand.
+    float dcr = 0.0f, dcg = 0.0f, wsum = 0.0f;
+    const float cri = (float)p.cr[i], cgi = (float)p.cg[i];
+#endif
     // Also not the cache, and for a sharper reason than the friction pass: by the time viscosity
     // runs, pos has been overwritten with the CORRECTED predicted position, so the cached list --
     // built before any correction -- is a step out of date here in a way it never is inside the
     // iteration loop. One scan of five is not worth spending that.
     forEachNeighbour(v, h, pi, [&](int j) {
       if (j == i) return;
-      dv += (p.vel(j) - vi) * k_.poly6(length2(p.pos(j) - pi));
+      const float wj = k_.poly6(length2(p.pos(j) - pi));
+      dv += (p.vel(j) - vi) * wj;
+#if PARTSIM_ENABLE_CHROMA
+      dcr += ((float)p.cr[j] - cri) * wj;
+      dcg += ((float)p.cg[j] - cgi) * wj;
+      wsum += wj;
+#endif
     });
     p.setVel(i, vi + dv * (c * mass_));
+#if PARTSIM_ENABLE_CHROMA
+    // Normalised by the weight sum rather than scaled by mass, so the rate means the same thing
+    // whatever the local density -- dye in a thin stream mixes at the same pace as dye in a pool.
+    //
+    // In place, like the velocity above, so this is Gauss-Seidel and not exactly conserving: a
+    // later particle sees earlier particles already moved toward it. Jacobi would conserve exactly
+    // but needs a second chroma buffer. The drift is measured rather than assumed -- see
+    // tests/test_chroma.cpp, which bounds it over a long mix.
+    //
+    // Rounded, not truncated, and in 8.8 rather than in bytes. Truncating a byte here destroyed
+    // 98% of the red dye over 600 steps, because every particle gaining a fraction of a unit lost
+    // all of it and the particle giving the dye away lost its share exactly.
+    if (wsum > 1e-12f) {
+      const float inv = kColourDiffusion / wsum;
+      const float nr = cri + dcr * inv;
+      const float ng = cgi + dcg * inv;
+      p.cr[i] = (uint16_t)(pclamp(nr, 0.0f, (float)kChromaOne) + 0.5f);
+      p.cg[i] = (uint16_t)(pclamp(ng, 0.0f, (float)kChromaOne) + 0.5f);
+    }
+#endif
   }
 }
 

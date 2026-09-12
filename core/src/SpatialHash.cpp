@@ -42,6 +42,16 @@ bool SpatialHash::build(const SimVolume& v, Particles& p, void* scratch, Paralle
   uint8_t* bs = (uint8_t*)scratch;
   for (int k = 0; k < n; ++k) bs[k] = p.mat[idx_[k]];
   for (int k = 0; k < n; ++k) p.mat[k] = bs[k];
+#if PARTSIM_ENABLE_CHROMA
+  // Chroma permutes with everything else. Miss it and the dye detaches from the particle carrying
+  // it -- which does not crash, does not move the state hash, and shows up only as colour that
+  // smears across the fluid a little more each step.
+  uint16_t* ws = (uint16_t*)scratch;  // chroma is 16-bit; the byte scratch above will not hold it
+  for (int k = 0; k < n; ++k) ws[k] = p.cr[idx_[k]];
+  for (int k = 0; k < n; ++k) p.cr[k] = ws[k];
+  for (int k = 0; k < n; ++k) ws[k] = p.cg[idx_[k]];
+  for (int k = 0; k < n; ++k) p.cg[k] = ws[k];
+#endif
 
 #if PARTSIM_NEIGHBOUR_CACHE
   buildNeighbours(v, p, par ? *par : serialParallel());

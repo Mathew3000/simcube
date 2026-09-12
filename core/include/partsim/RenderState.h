@@ -34,6 +34,10 @@ struct ParticleView {
   const float* vy;
   const float* vz;
   const uint8_t* mat;
+#if PARTSIM_ENABLE_CHROMA
+  const uint16_t* cr;
+  const uint16_t* cg;
+#endif
   int n;
 };
 
@@ -79,11 +83,21 @@ class RenderParticles {
     x_[i] = pos.x; y_[i] = pos.y; z_[i] = pos.z;
     vx_[i] = vel.x; vy_[i] = vel.y; vz_[i] = vel.z;
     mat_[i] = material;
+#if PARTSIM_ENABLE_CHROMA
+    // A display node receives chroma in the frame; until the wire format carries it (M4-D) this
+    // defaults to blue rather than to whatever the array held last.
+    cr_[i] = 0;
+    cg_[i] = 0;
+#endif
     return true;
   }
 
   ParticleView view() const {
+#if PARTSIM_ENABLE_CHROMA
+    return ParticleView{x_, y_, z_, vx_, vy_, vz_, mat_, cr_, cg_, n_};
+#else
     return ParticleView{x_, y_, z_, vx_, vy_, vz_, mat_, n_};
+#endif
   }
 
  private:
@@ -94,6 +108,10 @@ class RenderParticles {
   alignas(16) float vy_[kMaxParticles];
   alignas(16) float vz_[kMaxParticles];
   uint8_t mat_[kMaxParticles];
+#if PARTSIM_ENABLE_CHROMA
+  uint16_t cr_[kMaxParticles];
+  uint16_t cg_[kMaxParticles];
+#endif
   int n_ = 0;
 };
 
