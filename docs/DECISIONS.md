@@ -924,6 +924,45 @@ figure that made it look marginal was never measured.
 set to: those boards sit inside the panel stack where the emissions are worst, they carry the
 tightest budget, and D34's other two objections apply to them unchanged.
 
+### D54. Chaining is broadcast with a cumulative count, not paired with acknowledgements **[STANDS]**
+
+Two choices in the cube-to-cube link, both of which had an obvious alternative.
+
+**Broadcast, not paired.** A chain is an order the user configures — cube 1 pours into cube 2 —
+and the paired alternative means storing each cube's neighbour MAC, pairing every cube with the
+next before the object does anything, and re-pairing whenever one is replaced. Broadcast plus a
+link id in the payload costs a byte and makes a cube's position in the chain a setting rather than
+a ceremony.
+
+**Unacknowledged, with a cumulative count instead.** A spill packet is worth less than the latency
+of retrying it. But a dropped packet in a closed ring is volume that never comes back, and the
+symptom — beakers slowly emptying over minutes — reads as a physics leak rather than as a lost
+radio frame. So the header carries the sender's **cumulative** spill count, which only ever
+advances: a receiver that has taken fewer particles than that knows exactly how many went missing
+and can make them up. `SpillReceiver` is that arithmetic, and it is why `SpillQueue::totalOut`
+survives `clear()`.
+
+The same reasoning drives the receive ring's overflow policy: it drops the **newest** packet rather
+than overwriting the oldest, because a recent loss is made up on the next packet while overwriting
+an unread older one loses particles the consumer already believes it is about to get.
+
+### D55. Two `setup()` inits were in a branch the master never takes **[REVERSED]**
+
+`CoreParallel::begin` — the solver's second core, worth a measured 1.17x — was written inside the
+single-node `#else` of `setup()`'s role branch. The **master** is the one board in a multi-node cube
+whose entire job is the solver, and it took the other branch, so it never started the worker.
+
+The build succeeded, every test passed, all eight environments linked, and the only symptom would
+have been a master running at half the speed it had been measured at. It surfaced only because a
+second init placed next to it -- the ESP-NOW bring-up -- printed a line that never appeared.
+
+Both now sit **before** the role branch, guarded by `PARTSIM_RUNS_SOLVER` rather than by which task
+happens to be created below.
+
+The pattern, and it is the one §9 keeps recording: **a measurement taken on one configuration does
+not transfer to another by assumption.** The 1.17x was measured on `cube`, which is single-node, and
+carried into a plan for `master` without anything checking that master had the code at all.
+
 ### D41. Commits carry no attribution trailer **[USER]**
 
 Organisation rule: never produce co-authoring messages, never mention Claude in commit messages. A
