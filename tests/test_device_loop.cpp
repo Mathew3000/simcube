@@ -64,7 +64,10 @@ void settleLevel() {
   CHECK(g_sim.initScene(Simulation::kCube, 0, 7));  // water tank
   g_motion.init(MotionConfig::defaults(), AxisMap::identity());
   g_sim.setAutoCycle(false);
-  run(kLevel, Vec3{0.0f, 0.0f, 0.0f}, 4.0f);
+  // 8 seconds, not 4. Coarse particles carry more energy each and take longer to shed it: at
+  // spacing 4.0 the fixture reads mean|v| 1.52 after 4 s and 0.06 after 8. Four was enough at the
+  // spacing this was written for and is not a property of the loop being tested.
+  run(kLevel, Vec3{0.0f, 0.0f, 0.0f}, 8.0f);
 }
 
 }  // namespace
@@ -156,7 +159,10 @@ TEST(device_loop_shaking_disturbs_the_fluid_and_it_recovers) {
 
   // And it must come back to rest rather than staying agitated -- a shake that pumps energy in
   // without it draining is how a PBF solver ends up boiling.
-  run(kLevel, Vec3{0.0f, 0.0f, 0.0f}, 6.0f);
+  // 8 seconds, not 4. Coarse particles carry more energy each and take longer to shed it: at
+  // spacing 4.0 the fixture reads mean|v| 1.52 after 4 s and 0.06 after 8. Four was enough at the
+  // spacing this was written for and is not a property of the loop being tested.
+  run(kLevel, Vec3{0.0f, 0.0f, 0.0f}, 8.0f);
   const float settled = meanSpeed();
   std::printf("       shake: settled back to mean|v| %.3f\n", settled);
   CHECK(settled < 1.0f);

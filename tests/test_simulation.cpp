@@ -37,13 +37,13 @@ TEST(sim_init_caps_at_capacity) {
   // never settles.
   CHECK(g_sim.init(Simulation::kCube, kMaxParticles, 2));
   CHECK(g_sim.particleCount() <= g_sim.capacity());
-  CHECK(g_sim.particleCount() > 1000);
+  CHECK(g_sim.particleCount() > particlesForFill(1000));
 
   CHECK(g_sim.init(Simulation::kSinglePanel, kMaxParticles, 2));
   CHECK(g_sim.geometry().count() == 1);
   // A slab tolerates a much smaller share of nominal capacity than a cube.
   CHECK(g_sim.particleCount() <= g_sim.capacity() / 4);
-  CHECK(g_sim.particleCount() > 50);
+  CHECK(g_sim.particleCount() > particlesForFill(50));
 }
 
 TEST(sim_orientation_rotates_gravity_into_object_space) {

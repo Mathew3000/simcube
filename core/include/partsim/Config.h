@@ -36,6 +36,66 @@
 // does not grow with panel resolution.
 #define PARTSIM_DEVICE_MAX_FIELD_CELLS 1728
 
+// --- capability tiers ------------------------------------------------------
+// A tier is a NAMED point on the ladder, not a free combination of the switches below. Nineteen
+// independent knobs is half a million configurations and none of them are tested; a combination
+// nobody built will break silently, and there will be no golden hash to catch it. So the tiers are
+// enumerated here, each one buildable and verifiable, and anything else is a deliberate override.
+//
+//   lite    32x32 x6, water only, d=4.0, 4-bit   one S3 with room to spare
+//   cube    32x32 x6, everything, d=3.0, 6-bit   what ships today (the plain ESP32 profile)
+//   beaker  64x64,    water only, d=2.5, 6-bit   liquid-only, so 30Hz physics is available
+//   future  64x64,    everything, d=1.0          host-verified only; no MCU runs it
+//
+// Each sets only what it means to change; everything else falls through to the defaults below.
+//
+// A tier says WHAT to simulate and how well. It deliberately does not pick a target profile -- the
+// capacities and the panel resolution come from PARTSIM_PROFILE_*, and a PlatformIO environment
+// sets both. Folding the profile in here made a host test build think it was firmware and lose
+// its RGBA buffers.
+
+#ifdef PARTSIM_TIER_LITE
+#define PARTSIM_ENABLE_SAND 0
+#define PARTSIM_ENABLE_HEAT 0
+#define PARTSIM_REST_SPACING 4.0f
+#define PARTSIM_COLOUR_BITS 4
+#endif
+
+#ifdef PARTSIM_TIER_BEAKER
+#define PARTSIM_ENABLE_SAND 0
+#define PARTSIM_ENABLE_HEAT 0
+#define PARTSIM_REST_SPACING 2.5f
+// 60 Hz, NOT the 30 Hz this tier was first written with.
+//
+// Halving the rate was expected to be available here: it is worth 2.08x and it was rejected for
+// the shipping build only because it collapses a sand heap, and there is no sand in a beaker. It
+// fails for a second, independent reason at this spacing. Measured, same fixture, 2500 steps:
+//
+//   d=2.5 @ 60Hz   mean|v| 0.031   12/1310 still moving   settles
+//   d=2.5 @ 30Hz   mean|v| 1.011  524/1310 still moving   does not
+//   d=4.0 @ 60Hz   mean|v| 0.000    0/384  still moving   settles
+//
+// Finer particles need more, not fewer, steps to shed momentum, and at 30 Hz this pool is still
+// visibly agitated after 5000 steps (0.616). The rate lever does not survive the spacing that
+// beaker mode's colour resolution requires.
+#endif
+
+#ifdef PARTSIM_TIER_FUTURE
+// Deliberately beyond any MCU measured. The host build is where a configuration gets validated
+// before the silicon to run it exists; this is the rung that keeps the ladder honest.
+//
+// BUILD-AND-RUN ONLY. It builds, runs and conserves particles, and it does not pass the physics
+// fixtures, because those assert that a pool has reached rest within a step budget and a fine
+// fluid needs far more than a linear extension of one: at spacing 1.0 the hydrostatic fixture
+// still reads mean|v| 1.69 after 7500 steps where spacing 3.0 reaches 0.05 in 2500. That is a
+// property of the fluid, not a fault -- but until a tier this fine is worth the minutes of CPU to
+// verify, treat a green run here as "it did not crash" and nothing more.
+#define PARTSIM_REST_SPACING 1.0f
+#define PARTSIM_MAX_PARTICLES 24000
+#define PARTSIM_MAX_GRID_CELLS 8192
+#define PARTSIM_MAX_FIELD_CELLS 40000
+#endif
+
 #ifdef PARTSIM_PROFILE_ESP32
 
 // Single node driving all six 32x32 panels. This is the Milestone 2 configuration and it stays
@@ -221,6 +281,17 @@ constexpr float kRefSpacing = 1.5f;
 // bit-identical and this scaling cannot move a golden hash on its own.
 constexpr float kFillCountScale =
     (kRefSpacing * kRefSpacing * kRefSpacing) / (kRestSpacing * kRestSpacing * kRestSpacing);
+// Steps a test fixture needs to reach rest, relative to the reference spacing.
+//
+// Finer particles shed momentum more slowly: each carries less of it, the corrections per step are
+// clamped to 0.5*d and so shrink with d, and there are more layers to settle through. A step count
+// written for one spacing therefore measures "has it finished yet" rather than "does it settle" at
+// any other. Linear in 1/d, which matches the clamp; verified against the tiers rather than
+// derived from first principles.
+constexpr int settleSteps(int refSteps) {
+  return (int)((float)refSteps * kRefSpacing * 2.0f / kRestSpacing + 0.5f);
+}
+
 constexpr int particlesForFill(int refCount) {
   return (int)((float)refCount * kFillCountScale + 0.5f);
 }

@@ -184,7 +184,12 @@ TEST(volume_coord_clamps_and_flattens_uniquely) {
 
   // flatten is injective over the whole grid.
   const IVec3 d = v.dim();
-  bool seen[11 * 11 * 11] = {false};
+  // Sized by the compile-time grid capacity, not by the 11^3 that one rest spacing happens to
+  // produce. kCellSize is 2*kRestSpacing, so a finer build has more cells: at spacing 1.0 the grid
+  // is 16^3 = 4096 and the old literal overran the stack, aborting the whole binary. Static rather
+  // than automatic because kMaxGridCells is 32768 on the host profile.
+  static bool seen[kMaxGridCells];
+  for (int i = 0; i < v.cellCount(); ++i) seen[i] = false;
   for (int z = 0; z < d.z; ++z)
     for (int y = 0; y < d.y; ++y)
       for (int x = 0; x < d.x; ++x) {
