@@ -257,7 +257,7 @@ void setup() {
       g_console.println("FATAL: HUB75 init failed -- check Pins.h against the wiring");
       fatal();
     }
-    // Two separate facts, and the second one is a self-test rather than a claim: allRunsHorizontal
+    // Two separate facts, and the second is a self-test rather than a claim: allRunsHorizontal
     // says the MOUNT TABLE permits the row-walking blit, fastBlit says the DMA buffer layout
     // actually verified against drawPixelRGB888 at boot (PanelFramebuffer.h).
     g_console.printf("panels: chain %dx%d, rows %s, blit %s\n", g_panels.chain().chainWidth(),

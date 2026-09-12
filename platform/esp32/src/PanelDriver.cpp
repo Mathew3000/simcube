@@ -2,6 +2,7 @@
 
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 
+#include "PanelFramebuffer.h"
 #include "Pins.h"
 
 using namespace partsim;
@@ -50,8 +51,139 @@ bool PanelDriver::begin(const Geometry& g, const int* panels, int count, uint8_t
     return false;
   }
   dma_->setBrightness8(brightness);
+
+  depth_ = cfg.getPixelColorDepthBits();
+  rowsPerFrame_ = panelH / MATRIX_ROWS_IN_PARALLEL;
+  fastBlit_ = verifyFastBlit();
+
+  // After verifyFastBlit(), which deliberately dirties a few texels of the back buffer.
   dma_->clearScreen();
   return true;
+}
+
+#if PARTSIM_FAST_BLIT
+namespace {
+
+// The three RGB bits texel `packed` contributes to bitplane `plane`.
+//
+// `packed` interleaves the compensated channels three bits apart and is ALREADY shifted into the
+// half of the DMA word this row owns (see PanelDriver::spread_ and blitRowFast), so `mask` is
+// 0b111 in that same position and this is one shift and one mask -- not the six mask-and-test
+// rounds the library does per texel.
+inline uint16_t planeBits(uint32_t packed, int plane, uint32_t mask) {
+  return (uint16_t)((packed >> (3 * plane)) & mask);
+}
+
+}  // namespace
+#endif
+
+#if PARTSIM_FAST_BLIT
+// The raw DMA words a run occupies, all bitplanes, for verifyFastBlit to compare. Whole words,
+// including the half of each that belongs to the other scan row -- that half must survive a blit.
+void PanelDriver::snapRow(void* fbv, const ChainRun& run, int w, uint16_t* out) const {
+  frameStruct* fb = (frameStruct*)fbv;
+  const int cy = run.cy < rowsPerFrame_ ? run.cy : run.cy - rowsPerFrame_;
+  const rowBitStruct* rb = fb->rowBits[cy].get();
+  for (int p = 0; p < depth_; ++p)
+    for (int i = 0; i < w; ++i)
+      out[p * w + i] = rb->data[(size_t)p * rb->width + (size_t)(run.cx + i * run.dx)];
+}
+#endif
+
+// spread_[v]: the compensated value for input byte v, with bit p moved to bit 3p, so three table
+// loads and two shifts give a texel's whole six-plane contribution.
+//
+// lumConvTab is the HUB75 library's own CIE table, selected by PIXEL_COLOR_DEPTH_BITS at COMPILE
+// time -- which is not the runtime depth passed to setPixelColorDepthBits(). The library takes the
+// low `depth_` bits of whatever that table holds, so this does too. Reproducing the library
+// exactly is the requirement here, including where the library is wrong: see docs/W5-FINDINGS.md
+// for what the mismatch costs and why fixing it is a separate change.
+void PanelDriver::buildSpread() {
+#if PARTSIM_FAST_BLIT
+  const uint32_t mask = (1u << depth_) - 1u;
+  for (int v = 0; v < 256; ++v) {
+    const uint32_t c = (uint32_t)lumConvTab[v] & mask;
+    uint32_t s = 0;
+    for (int p = 0; p < depth_; ++p)
+      if (c & (1u << p)) s |= 1u << (3 * p);
+    spread_[v] = s;
+  }
+#endif
+}
+
+// Proves the row-walking path writes exactly the DMA words drawPixelRGB888 would have.
+//
+// The house rule applies to correctness as much as to timing: PanelFramebuffer.h reaches a private
+// member, and "the layout is what I think it is" is an assertion. So this blits a real row through
+// the real shipping code both ways and compares the raw words -- which covers the brightness
+// table, the bitplane packing, the two-halves bit offset, the chain addressing and the run
+// direction in one test, on the actual buffer the library allocated.
+//
+// Runs once, in begin(), into the back buffer that nothing is scanning out yet.
+bool PanelDriver::verifyFastBlit() {
+#if !PARTSIM_FAST_BLIT
+  return false;
+#else
+  if (!dma_ || depth_ < 1 || depth_ > 8 || rowsPerFrame_ < 1) return false;
+
+  buildSpread();
+
+  frameStruct* fb = panelfb::backBuffer(dma_);
+  if (fb == nullptr) return false;
+  if ((int)fb->rowBits.size() != rowsPerFrame_) return false;
+
+  const int chainW = chain_.chainWidth();
+  for (int y = 0; y < rowsPerFrame_; ++y) {
+    const rowBitStruct* rb = fb->rowBits[y].get();
+    if (rb == nullptr || rb->data == nullptr) return false;
+    if ((int)rb->width < chainW) return false;
+    if (rb->colour_depth < depth_) return false;
+  }
+
+  // Face 0 at two rows: one in each half of the scan, so both the RGB1 and the RGB2 bit offset
+  // are exercised, and with them the requirement that a write to one half leaves the other alone.
+  const int w = chain_.chainWidth() / chain_.count();
+  if (w < 2 || w > kPanelRes) return false;
+  const int h = chain_.chainHeight();
+
+  uint16_t ref[8 * kPanelRes];
+  for (int pass = 0; pass < 2; ++pass) {
+    const int j = pass == 0 ? 0 : h - 1;
+    const ChainRun run = chain_.row(0, j);
+    if (run.dy != 0) continue;  // this mount has no span to walk; nothing to verify
+
+    // A pattern that hits both ends of the ramp and every low bit in between, so a dropped
+    // bitplane or a swapped channel cannot pass by coincidence.
+    for (int i = 0; i < w; ++i) {
+      staging_[i * 3 + 0] = (uint8_t)(i * 7 + 1);
+      staging_[i * 3 + 1] = (uint8_t)(255 - i * 5);
+      staging_[i * 3 + 2] = (uint8_t)(i * 3 + 128);
+    }
+
+    // The other half of each shared word, set to something non-zero first: if the fast path used
+    // the wrong bit offset or the wrong clear mask, it would wipe this and the comparison after
+    // the second blit would still pass. Writing it through the library makes it a real reference.
+    const int other = run.cy < rowsPerFrame_ ? run.cy + rowsPerFrame_ : run.cy - rowsPerFrame_;
+    for (int i = 0; i < w; ++i)
+      dma_->drawPixelRGB888((int16_t)(run.cx + i * run.dx), (int16_t)other, 200, 120, 60);
+
+    blitRowSlow(run, staging_, w);
+    snapRow(fb, run, w, ref);
+
+    // Dirty the row so an unwritten word cannot be mistaken for a matching one.
+    for (int i = 0; i < w * 3; ++i) staging_[i] = (uint8_t)(255 - staging_[i]);
+    blitRowSlow(run, staging_, w);
+    for (int i = 0; i < w * 3; ++i) staging_[i] = (uint8_t)(255 - staging_[i]);
+
+    blitRowFast(fb, run, staging_, w);
+
+    uint16_t mine[8 * kPanelRes];
+    snapRow(fb, run, w, mine);
+    for (int i = 0; i < depth_ * w; ++i)
+      if (mine[i] != ref[i]) return false;
+  }
+  return true;
+#endif
 }
 
 void PanelDriver::setBrightness(uint8_t b) {
@@ -69,25 +201,90 @@ bool PanelDriver::allRunsHorizontal(const Geometry&) const {
   return true;
 }
 
-void PanelDriver::blitFace(int face, int w, int h) {
-  // Row by row rather than texel by texel in map(): row() hoists the mount arithmetic out of
-  // the inner loop, so the per-pixel cost is one add and the driver call.
+void PanelDriver::blitRowSlow(const ChainRun& run, const uint8_t* src, int w) {
+  // One drawPixelRGB888 per texel. Correct for any mount and the only path when a quarter-turn
+  // maps the renderer row onto a chain COLUMN, where the six bitplane words are `width` apart
+  // instead of adjacent and there is no span to walk.
+  int cx = run.cx, cy = run.cy;
+  for (int i = 0; i < w; ++i) {
+    dma_->drawPixelRGB888((int16_t)cx, (int16_t)cy, src[0], src[1], src[2]);
+    src += 3;
+    cx += run.dx;
+    cy += run.dy;
+  }
+}
+
+void PanelDriver::blitRowFast(void* fbv, const ChainRun& run, const uint8_t* src, int w) {
+#if PARTSIM_FAST_BLIT
+  frameStruct* fb = (frameStruct*)fbv;
+
+  // Which half of the scan this row belongs to, and therefore which three bits of the shared DMA
+  // word it owns. The other half's bits must survive: one word drives two rows at once.
+  int cy = run.cy;
+  uint16_t clear = BITMASK_RGB1_CLEAR;
+  int coff = 0;
+  if (cy >= rowsPerFrame_) {
+    cy -= rowsPerFrame_;
+    clear = BITMASK_RGB2_CLEAR;
+    coff = BITS_RGB2_OFFSET;
+  }
+  rowBitStruct* rb = fb->rowBits[cy].get();
+  uint16_t* const base = rb->data;
+  const size_t stride = rb->width;
+
+  // Compensate and interleave the row once, then read it back once per bitplane. Doing it the
+  // other way round -- texel outer, plane inner -- is what forces the DMA row pointer to be
+  // recomputed per texel, and that recomputation is the cost being removed here.
   //
-  // That driver call is the expensive part -- drawPixelRGB888 is a read-modify-write per
-  // bitplane, on the order of 130 cycles. Six 32x32 faces is 6144 of them, about 3ms at 240MHz,
-  // or roughly a tenth of a frame at 30fps. Measurable but affordable, and the ChainRun
-  // structure is here so a direct row write into the DMA buffer can replace it without
-  // disturbing the mapping if that tenth is ever needed.
+  // The half-of-panel shift rides along in this pass rather than happening once per texel per
+  // PLANE below: six times fewer shifts, for free, because this pass touches every texel anyway.
+  // Measured 6.75 -> 6.49 ms.
+  const uint32_t mask = 7u << coff;
+  for (int i = 0; i < w; ++i)
+    packed_[i] = (spread_[src[i * 3 + 0]] | (spread_[src[i * 3 + 1]] << 1) |
+                  (spread_[src[i * 3 + 2]] << 2))
+                 << coff;
+
+  for (int p = 0; p < depth_; ++p) {
+    uint16_t* q = base + (size_t)p * stride + (size_t)run.cx;
+    // dx is +1 or -1: a mirrored mount runs the renderer row backwards along the chain. Two loops
+    // rather than a variable step so the common direction indexes forward.
+    if (run.dx > 0) {
+      for (int i = 0; i < w; ++i)
+        q[i] = (uint16_t)((q[i] & clear) | planeBits(packed_[i], p, mask));
+    } else {
+      for (int i = 0; i < w; ++i)
+        q[-i] = (uint16_t)((q[-i] & clear) | planeBits(packed_[i], p, mask));
+    }
+  }
+#else
+  (void)fbv;
+  (void)run;
+  (void)src;
+  (void)w;
+#endif
+}
+
+void PanelDriver::blitFace(int face, int w, int h) {
+  // Row by row rather than texel by texel in map(): row() hoists the mount arithmetic out of the
+  // inner loop. What ChainRun was actually built for is blitRowFast above -- a contiguous span of
+  // renderer texels landing on a contiguous span of chain pixels, so the DMA row pointer is
+  // fetched once per bitplane per ROW rather than once per bitplane per texel, which is what
+  // drawPixelRGB888 does and what made the blit 7.50 ms of an 11.10 ms frame.
+#if PARTSIM_FAST_BLIT
+  void* fb = (fastBlit_ && w <= kPanelRes) ? (void*)panelfb::backBuffer(dma_) : nullptr;
+#else
+  void* fb = nullptr;
+#endif
   for (int j = 0; j < h; ++j) {
     const ChainRun run = chain_.row(face, j);
     const uint8_t* src = staging_ + (size_t)j * (size_t)w * 3u;
-    int cx = run.cx, cy = run.cy;
-    for (int i = 0; i < w; ++i) {
-      dma_->drawPixelRGB888((int16_t)cx, (int16_t)cy, src[0], src[1], src[2]);
-      src += 3;
-      cx += run.dx;
-      cy += run.dy;
-    }
+    // A quarter-turn maps this renderer row onto a chain COLUMN, where the run's texels are a
+    // whole row apart in the DMA buffer and there is no span to walk. Per-texel is what that is.
+    if (fb != nullptr && run.dy == 0)
+      blitRowFast(fb, run, src, w);
+    else
+      blitRowSlow(run, src, w);
   }
 }
 

@@ -46,13 +46,44 @@ class PanelDriver final : public partsim::app::Display {
   // for all of them. Reported at boot because it is a property of the mount table, not the code.
   bool allRunsHorizontal(const partsim::Geometry& g) const override;
 
+  // Whether the row-walking blit verified at boot and is in use. False either because the HUB75
+  // library's buffer layout did not match what PanelFramebuffer.h expects, or because it was
+  // compiled out. The picture is the same either way; the blit is just ~4x slower. Not on the
+  // Display interface -- it is a fact about this driver, and the boot report holds the concrete
+  // type.
+  bool fastBlit() const { return fastBlit_; }
+
  private:
   void blitFace(int face, int w, int h);
+  // The per-texel path. Correct for any mount, including the quarter-turns that map a renderer row
+  // onto a chain COLUMN, where there is no contiguous run to walk.
+  void blitRowSlow(const partsim::ChainRun& run, const uint8_t* src, int w);
+  // The row-walking path, for a run that is horizontal in the chain. `fb` is the library's back
+  // buffer; see PanelFramebuffer.h for how it is reached and why.
+  void blitRowFast(void* fb, const partsim::ChainRun& run, const uint8_t* src, int w);
+  // Builds spread_ from the HUB75 library's own brightness table.
+  void buildSpread();
+  // Reads back the raw DMA words a run occupies, all bitplanes, for verifyFastBlit to compare.
+  void snapRow(void* fb, const partsim::ChainRun& run, int w, uint16_t* out) const;
+  // Blits a test row both ways and compares the raw DMA words. See PanelFramebuffer.h.
+  bool verifyFastBlit();
 
   MatrixPanel_I2S_DMA* dma_ = nullptr;
   partsim::ChainMap chain_;
   partsim::FaceMount mounts_[partsim::kMaxPanels];
   int faces_ = 0;
+  bool fastBlit_ = false;
+  uint8_t depth_ = 0;
+  // Rows the panel scans in parallel halves: chain y below this drives R1G1B1, at or above it
+  // drives R2G2B2 of the same DMA word.
+  int rowsPerFrame_ = 0;
   // One face of RGB. Static, like everything else -- 3KB rather than 24KB for all six.
   uint8_t staging_[partsim::kMaxPanelTexels * 3];
+  // Brightness compensation and bitplane interleave folded into one table: entry v holds the
+  // library's compensated value for input v with bit p moved to bit 3p, so a texel's whole
+  // six-plane contribution is three table loads and two shifts instead of six mask-and-test
+  // rounds. 1KB, built once in begin().
+  uint32_t spread_[256];
+  // One row's texels, pre-spread, so the six bitplane passes read it instead of recomputing it.
+  uint32_t packed_[partsim::kPanelRes];
 };
