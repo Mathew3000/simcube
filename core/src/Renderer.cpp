@@ -130,20 +130,47 @@ void Renderer::splat(ParticleView p, const Geometry& g) {
 
       uint16_t* dst = accum_[k];
       const int w = (int)pan.w;
+      // The kernel is circular and the box is square, so about a fifth of the texels in [i0,i1]
+      // can never contribute. Rather than compute the chord width per row -- which wants a square
+      // root, and the S3's FPU has none (DECISIONS.md F1) -- walk outward from the texel nearest
+      // the particle and stop at the first miss.
+      //
+      // That is exact, not a heuristic, and it is why the pixel hash does not move: |dx| grows
+      // monotonically away from `ic`, so does dx*dx + dy2, so does the product with kernelScale_,
+      // and so does its truncation to int. A texel past the first failure cannot pass the test
+      // the old loop applied to it. The same argument in dy gives the whole-row rejection.
+      //
+      // Sweeping right-then-left visits a row in a different ORDER than before. Every texel in a
+      // row is a different cell, so the saturating add sees the same operands either way.
       for (int j = j0; j <= j1; ++j) {
         const float dy = ((float)j + 0.5f) - t;
         const float dy2 = dy * dy;
-        for (int ii = i0; ii <= i1; ++ii) {
+        if ((int)(dy2 * kernelScale_) >= kKernelSize) continue;  // row entirely outside the disc
+        uint16_t* row = dst + ((size_t)j * (size_t)w) * kChannelCount + ch;
+
+        // (int)s truncates rather than floors, which differ only when s < 0 -- and there both
+        // land below i0, so the clamp gives the same texel either way.
+        const int ic = iclamp((int)s, i0, i1);
+        for (int ii = ic; ii <= i1; ++ii) {
           const float dx = ((float)ii + 0.5f) - s;
           const int kq = (int)((dx * dx + dy2) * kernelScale_);
-          if (kq >= kKernelSize) continue;
+          if (kq >= kKernelSize) break;
           // >> 6 rather than >> 8: at >> 8 a single particle's contribution maxes out at 255
           // and the dim tail of the falloff rounds to zero, truncating the outer glow. Two
           // extra bits keep that tail, and a dense texel still only reaches ~6500 of the
           // 65535 a uint16 holds.
           const int contrib = (a * kernel_[kq]) >> 6;
           if (contrib == 0) continue;
-          uint16_t& cell = dst[((j * w) + ii) * kChannelCount + ch];
+          uint16_t& cell = row[(size_t)ii * kChannelCount];
+          cell = satAdd(cell, contrib);
+        }
+        for (int ii = ic - 1; ii >= i0; --ii) {
+          const float dx = ((float)ii + 0.5f) - s;
+          const int kq = (int)((dx * dx + dy2) * kernelScale_);
+          if (kq >= kKernelSize) break;
+          const int contrib = (a * kernel_[kq]) >> 6;
+          if (contrib == 0) continue;
+          uint16_t& cell = row[(size_t)ii * kChannelCount];
           cell = satAdd(cell, contrib);
         }
       }
