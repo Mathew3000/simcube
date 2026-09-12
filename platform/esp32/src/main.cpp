@@ -506,7 +506,12 @@ void runGolden() {
 #ifndef PARTSIM_PROFILE_ESP32_DISPLAY
 void runBench() {
   SuspendSim hold;  // every g_sim.init() below rebuilds the renderer the sim task is using
-  const int counts[] = {320, 640, 960, 1280};
+  // Sweep points, sized against the compiled pool rather than hardcoded. They were {320, 640,
+  // 960, 1280} for a 1280-particle pool; at 512 all but the first are silently clamped and the
+  // sweep reports a single row. Fractions of capacity keep the shape of the curve whatever the
+  // profile, and the exponent fit needs at least three spread-out points.
+  const int cap = g_sim.capacity() < kMaxParticles ? g_sim.capacity() : kMaxParticles;
+  const int counts[] = {cap / 4, cap / 2, (cap * 3) / 4, cap};
   const int reps = 30;
 
   Serial.println(F("particle sweep, water only (no heat field):"));

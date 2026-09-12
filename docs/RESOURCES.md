@@ -319,6 +319,67 @@ an optimisation helped before a board is attached, and not good enough to quote 
 The firmware still suppresses timing output under `PARTSIM_QEMU`, because a printed number gets
 quoted without its error bar -- run the `x` benchmark on hardware for anything that matters.
 
+### The conversion factors, measured across a sweep
+
+Re-measured after Milestone 3.6 with the `x` benchmark run on identical firmware in all three
+places. Both factors are stable across a 4x range of particle count, which is what makes them
+usable as conversions rather than as one-off observations:
+
+| particles | hardware | QEMU wall-clock | factor | QEMU `-icount shift=2` | factor |
+|---|---|---|---|---|---|
+| 128 | 10.87 | 3.60 | 3.02x | 7.35 | 1.48x |
+| 256 | 36.44 | 12.58 | 2.90x | 24.70 | 1.48x |
+| 384 | 67.60 | 22.32 | 3.03x | 46.03 | 1.47x |
+| 512 | 102.37 | 32.99 | 3.10x | 69.96 | 1.46x |
+
+**QEMU wall-clock x 3.0 = the S3**, on this laptop. Useful, and not portable to another machine.
+
+**QEMU icount x 1.47 = the S3**, on any machine — and this one is *derived*, not fitted. icount
+advances virtual time at 4 ns per instruction, i.e. 250 MHz at 1 IPC. The S3 runs at 240 MHz, and
+the two independent measurements give its real CPI on this workload:
+
+```
+n=512:  34 160 instructions/particle/step   (icount)
+        47 986 cycles/particle/step         (102.37 ms x 240 MHz / 512)
+        -> CPI 1.40
+```
+
+and `(250/240) x 1.40 = 1.46`, against a measured 1.47. The whole of icount's error is the clock
+assumption plus one and a half cycles per instruction. **So the emulator is a legitimate
+measurement instrument for relative work**, good to a few percent once corrected — which is the
+opposite of what this section claimed before hardware existed.
+
+### What that implies for an ESP32-P4
+
+The CPI above is the only non-obvious input, and it is measured rather than assumed. Everything
+else is arithmetic:
+
+| term | value | status |
+|---|---|---|
+| clock, 400 MHz vs 240 | **1.67x** | fact |
+| S3 CPI on this workload | **1.40** | measured, above |
+| P4 CPI | 1.1-1.3 | assumed — it has a real cache hierarchy and 768 KB L2MEM, and the working set here is ~86 KB |
+| RV32IMAFC instruction count vs Xtensa LX7 | 1.0-1.2x more | assumed — Xtensa has zero-overhead loops and richer addressing |
+
+That brackets the P4 at **1.5-2.0x on the solver, centred near 1.7x** — clock-dominated. An
+earlier estimate in this project of "2-3x" was not derived and is too generous.
+
+**And it does not matter much, which is the actual finding.** Only the solver scales with the MCU:
+
+| | frame at 375 particles | fps |
+|---|---|---|
+| ESP32-S3, measured | 157.2 ms | 6.4 |
+| ESP32-P4 at 1.7x | 105.1 ms | 9.5 |
+| ESP32-P4 at 2.0x | 94.0 ms | 10.6 |
+| solver free, MCU infinitely fast | 30.7 ms | **32.6** |
+
+Splat (17.6), blit (11.1) and resolve (3.1) are a **30.7 ms floor that no processor removes**. The
+P4 buys 3 fps; the floor caps everything at 32. The next real lever is not silicon, it is the
+splat footprint and the row-walking blit -- both software, both already identified.
+
+(The P4 also has no radio at all, so any P4 master implies a C6/C5 companion over SDIO for
+ESP-NOW. That is unchanged by the above and is a smaller consideration than the floor.)
+
 ### The arithmetic problem that did not need an emulator -- and its answer
 
 `kFixedDt` is 1/60 and the firmware calls `advance(1/30)`, so it runs **two physics steps per
