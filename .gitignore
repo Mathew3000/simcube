@@ -16,3 +16,6 @@ platform/wasm/web/public/partsim.wasm
 # one is fine and a stale one fails ctest.
 platform/wasm/web/public/partsim_beaker.mjs
 platform/wasm/web/public/partsim_beaker.wasm
+# The ink-tier artifact, built by scripts/build_wasm.sh --ink. Build output, same as the two above.
+platform/wasm/web/public/partsim_ink.mjs
+platform/wasm/web/public/partsim_ink.wasm

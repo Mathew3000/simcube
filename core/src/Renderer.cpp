@@ -556,6 +556,10 @@ void Renderer::accumulate(ParticleView p, HeatView f, const Geometry& g) {
 #if PARTSIM_INTERNAL_PIXELS
 void Renderer::render(ParticleView p, HeatView f, const Geometry& g) {
   accumulate(p, f, g);
+  resolveAll();
+}
+
+void Renderer::resolveAll() {
   for (int k = 0; k < renderCount_; ++k) resolve(panelOf_[k], pixels_[k], 4);
 }
 #endif

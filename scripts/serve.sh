@@ -11,5 +11,9 @@ if [ ! -f "$DIR/public/partsim.wasm" ]; then
   exit 1
 fi
 
+if [ ! -f "$DIR/public/partsim_ink.wasm" ]; then
+  echo "note: ink.html needs scripts/build_wasm.sh --ink (not built yet)" >&2
+fi
+
 echo "serving $DIR on http://localhost:$PORT/"
 cd "$DIR" && exec python3 -m http.server "$PORT"

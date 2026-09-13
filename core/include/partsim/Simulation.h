@@ -1,4 +1,5 @@
 #pragma once
+#include "partsim/InkField.h"
 #include "partsim/Renderer.h"
 #include "partsim/Scene.h"
 #include "partsim/Rng.h"
@@ -99,6 +100,22 @@ class Simulation {
   uint16_t dyeG() const { return dyeG_; }
 #endif
 
+#if PARTSIM_ENABLE_INK
+  // --- ink: dye in an implicit carrier liquid ---------------------------------------------
+  //
+  // Runs BESIDE the solver, not instead of it. The two are not meant to describe the same
+  // liquid at the same time -- a tier picks one -- but nothing here forces that, so a scene can
+  // show both while the look is being judged.
+  void injectInk(Vec3 objectPos, float radius, int channel, int amount) {
+    ink_.inject(objectPos, radius, channel, (uint8_t)iclamp(amount, 0, 255));
+  }
+  void spawnInkVortons(Vec3 objectPos, Vec3 axis, float radius, int strength, int life) {
+    ink_.spawnVortonPair(objectPos, axis, radius, strength, life);
+  }
+  void clearInk() { ink_.clear(); }
+  const InkField& ink() const { return ink_; }
+#endif
+
   // World-space down, rotated into object space by the object's orientation.
   void setOrientation(Quat q);
   // Directly set object-space gravity (used by tests and the golden sequence).
@@ -137,6 +154,9 @@ class Simulation {
     // Views explicitly, not the container overload: field_ is a FieldGrid or the
     // no-heat stand-in, and both expose view().
     renderer_.accumulate(particles_.view(), field_.view(), geometry_);
+#if PARTSIM_ENABLE_INK
+    renderer_.splatInk(ink_, geometry_);
+#endif
   }
 
 #if PARTSIM_INTERNAL_PIXELS
@@ -147,7 +167,13 @@ class Simulation {
   // nothing: one multiply-add per particle, inside a loop that already reads velocity.
   void render() {
     renderer_.setTimeOffset(interpolate_ ? accumulator_ : 0.0f);
-    renderer_.render(particles_.view(), field_.view(), geometry_);
+    // Splat, then ink, then resolve -- rather than render(), which would resolve before the ink
+    // had been composited and leave the dye out of the picture entirely.
+    renderer_.accumulate(particles_.view(), field_.view(), geometry_);
+#if PARTSIM_ENABLE_INK
+    renderer_.splatInk(ink_, geometry_);
+#endif
+    renderer_.resolveAll();
   }
 #endif
 
@@ -218,6 +244,13 @@ class Simulation {
   };
   using HeatField = NoField;
   HeatField field_;
+#endif
+#if PARTSIM_ENABLE_INK
+  InkField ink_;
+  // The field runs slower than the solver on purpose: dye movement is slow and continuous, and
+  // it does not need the 60 Hz the granular contact model does. A float accumulator rather than
+  // a step counter, so the cadence is right whatever PARTSIM_FIXED_DT_DEN the tier picks.
+  float inkAccum_ = 0.0f;
 #endif
   Renderer renderer_;
   float scratch_[kMaxParticles];

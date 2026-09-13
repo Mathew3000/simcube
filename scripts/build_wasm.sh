@@ -9,6 +9,8 @@
 #                                                                  compares against the host
 #   scripts/build_wasm.sh --beaker   -> public/partsim_beaker.mjs  the beaker tier: chroma, water
 #                                                                  only, d=2.5. beakers.html only.
+#   scripts/build_wasm.sh --ink      -> public/partsim_ink.mjs     the ink tier: a dye field with
+#                                                                  no bulk PBF. ink.html only.
 #
 # --beaker is a FLAG rather than a -D the caller passes, because the switch that matters
 # (PARTSIM_ENABLE_CHROMA) is set by the tier inside Config.h and is not a CMake cache variable:
@@ -30,7 +32,12 @@ EMSDK_DIR="${EMSDK_DIR:-$HOME/emsdk}"
 NAME=partsim
 BUILD_DIR=build-wasm
 TIER_FLAGS=""
-if [ "${1:-}" = "--beaker" ]; then
+if [ "${1:-}" = "--ink" ]; then
+  shift
+  NAME=partsim_ink
+  BUILD_DIR=build-wasm-ink
+  TIER_FLAGS="-DCMAKE_CXX_FLAGS=-DPARTSIM_TIER_INK=1"
+elif [ "${1:-}" = "--beaker" ]; then
   shift
   NAME=partsim_beaker
   # Its OWN build directory. Two configurations sharing one is a stale-object bug waiting to

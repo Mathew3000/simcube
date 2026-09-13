@@ -37,6 +37,13 @@ bool Simulation::init(int mode, int particleCount, uint32_t seed, int panelRes) 
 
   solver_.init();
   if (!field_.init(volume_)) return false;
+#if PARTSIM_ENABLE_INK
+  if (!ink_.init(volume_)) return false;
+  // Axes once, from the deterministic Rng, then their phase evolves on its own. Re-seeding per
+  // frame is what turns coherent curls into fog.
+  ink_.seedFlow(rng_);
+  inkAccum_ = 0.0f;
+#endif
   renderer_.setExposure(kSplatExposure);
   // A renderer that cannot serve this geometry is a configuration error, not a soft failure:
   // it means the build's render capacity is smaller than the faces it was asked to drive, and
@@ -129,6 +136,10 @@ void Simulation::setScene(int sceneId) {
 
   particles_.clear();
   field_.clear();
+#if PARTSIM_ENABLE_INK
+  ink_.clear();
+  inkAccum_ = 0.0f;
+#endif
   // Sand first so it starts at the bottom, which is where it ends up anyway -- starting it on
   // top just means watching it sink for several seconds before the scene looks right.
   if (targetSand_ > 0) fill(targetSand_, kSand, 0xA5A5u + (uint32_t)sceneId_);
@@ -342,6 +353,15 @@ void Simulation::fixedStep(float dt) {
   // Heat uses the same object-space gravity, so flames lean when the cube is tilted and get
   // pressed around when it is shaken, with no extra plumbing.
   field_.step(volume_, gravity_, jerk_, emitters_, emitterCount_, dt, rng_);
+#if PARTSIM_ENABLE_INK
+  // Fixed period, so a step is bit-reproducible; the accumulator only decides WHEN.
+  inkAccum_ += dt;
+  const float inkPeriod = 1.0f / (float)kInkHz;
+  while (inkAccum_ >= inkPeriod) {
+    ink_.step(gravity_, jerk_, kInkStepMs);
+    inkAccum_ -= inkPeriod;
+  }
+#endif
   if (volume_.isOpen()) harvestSpill();
   jerk_ *= kJerkDecay;
   if (length2(jerk_) < 1e-4f) jerk_ = Vec3{0.0f, 0.0f, 0.0f};

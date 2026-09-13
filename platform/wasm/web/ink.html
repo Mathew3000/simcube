@@ -1,0 +1,246 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>partsim — ink</title>
+<style>
+  :root { color-scheme: dark; --fg: #e8eef5; --dim: #7d8b9c; --line: #253040; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05070a; color: var(--fg);
+               font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  canvas { display: block; }
+
+  #ui { position: fixed; left: 16px; top: 14px; pointer-events: none;
+        text-shadow: 0 1px 3px #000; }
+  #ui h1 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+  #ui p { margin: 0; color: var(--dim); max-width: 52ch; }
+  #hud { position: fixed; left: 16px; bottom: 14px; display: flex; gap: 14px; flex-wrap: wrap;
+         align-items: center; color: var(--dim); }
+  #hud b { color: var(--fg); font-weight: 600; }
+  #hud button { pointer-events: auto; font: inherit; background: #101620cc; color: var(--fg);
+                border: 1px solid var(--line); border-radius: 4px; padding: 3px 9px;
+                cursor: pointer; }
+  #hud button:hover { border-color: #3b4c63; }
+  #red { border-color: #7a3540; }
+  #blue { border-color: #2f4a86; }
+  #err { position: fixed; inset: 0; display: none; place-content: center; padding: 40px;
+         color: #ff8080; white-space: pre-wrap; }
+</style>
+
+<div id="ui">
+  <h1>partsim — ink in water</h1>
+  <p>
+    A 16&sup3; dye field, not particles. <b>drag</b> tilts the cube so the ink settles ·
+    <b>flick + release</b> shakes it and spawns curls · <b>right-drag</b> orbits · <b>scroll</b> zooms
+  </p>
+</div>
+
+<div id="hud">
+  <span>fps <b id="fps">–</b></span>
+  <span>sim <b id="sim">–</b> ms</span>
+  <span>render <b id="render">–</b> ms</span>
+  <span>peak <b id="peak">–</b></span>
+  <span>curls <b id="curls">–</b></span>
+  <button id="red">drop red</button>
+  <button id="blue">drop blue</button>
+  <button id="pour">pour</button>
+  <button id="clear">clear</button>
+  <button id="bloomBtn">bloom</button>
+  <a href="./index.html" style="color:var(--dim)">particle cube</a>
+</div>
+
+<div id="err"></div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { createCubeView } from './cubeview.js';
+import createPartsim from './public/partsim_ink.mjs';
+
+const errEl = document.getElementById('err');
+const fail = (msg) => { errEl.style.display = 'grid'; errEl.textContent = msg; };
+
+let mod;
+try {
+  mod = await createPartsim();
+} catch (e) {
+  fail(`Failed to load the ink WASM module: ${e.message}\n\n` +
+       `Run scripts/build_wasm.sh --ink, then serve over http:// (not file://).`);
+  throw e;
+}
+
+if (!mod._ps_ink_enabled()) {
+  fail('This module was built without the ink tier.\n\nRun: scripts/build_wasm.sh --ink');
+  throw new Error('no ink');
+}
+
+const RES = (() => {
+  const v = parseInt(new URLSearchParams(location.search).get('res') || '32', 10);
+  return (v === 32 || v === 64) ? v : 32;
+})();
+
+// Zero particles on purpose. The ink tier still CAN carry the PBF pools -- Phase C is where the
+// tier stops allocating them -- but simulating water as well as dye would pay twice for one
+// picture, which is the entire argument the field rests on.
+if (!mod._ps_init(0, 0, 0xc0ffee, RES)) {
+  fail('ps_init failed');
+  throw new Error('ps_init');
+}
+
+// Bloom OFF by default, unlike index.html. DECISIONS.md D72: strong bloom blows coloured fluid out
+// to white, and colour is the whole subject here -- the page is a measuring instrument as well as
+// a picture, so it starts showing what a panel actually resolves to.
+// The pass is CREATED but starts disabled: passing bloom:false never builds it, and then the
+// toggle below would silently do nothing.
+const view = createCubeView(mod, { bloom: true });
+view.setBloom(false);
+const { renderer, controls, cube, panels, camRight, camUp, render } = view;
+
+const WORLD = 32;  // the container runs -16..+16 on every axis
+
+// Object-space "up": world up, rotated into the cube's frame. Dropping ink at the top of the
+// SCREEN rather than at +y in object space is what makes a tilted cube behave the way a tilted
+// beaker does -- otherwise a drop enters through whichever wall happens to be facing up.
+function objectUp() {
+  return new THREE.Vector3(0, 1, 0).applyQuaternion(cube.quaternion.clone().invert());
+}
+
+// Radii are in WORLD units against a 2-unit cell, so they have to be read as cells to make sense:
+// 7.0 is 3.5 cells across a 16-cell grid. A "realistic" 3-unit drop is 1.5 cells, which lands as a
+// handful of texels and reads as a speck rather than as ink.
+function drop(channel) {
+  const u = objectUp();
+  const p = u.clone().multiplyScalar(WORLD * 0.30);
+  mod._ps_ink_inject(p.x, p.y, p.z, 7.0, channel, 255);
+  // A counter-rotating pair about an axis across the fall direction: this is what rolls the head
+  // of the plume over on itself instead of letting it spread as a ball.
+  const axis = new THREE.Vector3(1, 0, 0).cross(u);
+  if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
+  axis.normalize();
+  mod._ps_ink_vortons(p.x, p.y, p.z, axis.x, axis.y, axis.z, 6.0, 700, 260);
+}
+
+document.getElementById('red').onclick = () => drop(0);
+document.getElementById('blue').onclick = () => drop(mod._ps_ink_channels() > 1 ? 1 : 0);
+document.getElementById('clear').onclick = () => mod._ps_ink_clear();
+
+// A held pour, which is the case the reference image actually shows: a continuous trunk with a
+// curled leading head, rather than one blob falling.
+let pouring = 0;
+const pourBtn = document.getElementById('pour');
+pourBtn.onclick = () => {
+  pouring = pouring ? 0 : (mod._ps_ink_channels() > 1 ? 1 + (Math.random() < 0.5) : 1);
+  pourBtn.style.color = pouring ? '#8fe3a0' : '';
+  pourBtn.textContent = pouring ? 'pouring' : 'pour';
+};
+
+const bloomBtn = document.getElementById('bloomBtn');
+let bloomOn = false;
+bloomBtn.style.color = '#7d8b9c';
+bloomBtn.onclick = () => {
+  bloomOn = !bloomOn;
+  view.setBloom(bloomOn);
+  bloomBtn.style.color = bloomOn ? '' : '#7d8b9c';
+};
+
+// Start with something in the volume, so the page is not black on arrival.
+{
+  const u = objectUp();
+  const side = new THREE.Vector3(1, 0, 0).cross(u).normalize();
+  const at = (k, ch) => {
+    const p = u.clone().multiplyScalar(WORLD * 0.18).add(side.clone().multiplyScalar(k));
+    mod._ps_ink_inject(p.x, p.y, p.z, 6.0, ch, 255);
+  };
+  at(-5, 0);
+  if (mod._ps_ink_channels() > 1) at(5, 1);
+}
+
+// --- tilt and flick, identical in spirit to index.html ---------------------
+const DRAG = 0.008;
+let dragging = false, velX = 0, velY = 0;
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true; velX = velY = 0;
+  renderer.domElement.setPointerCapture(e.pointerId);
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  velX = e.movementX; velY = e.movementY;
+  const q = new THREE.Quaternion()
+    .setFromAxisAngle(camUp(), e.movementX * DRAG)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(camRight(), e.movementY * DRAG));
+  cube.quaternion.premultiply(q);
+});
+
+const endDrag = (e) => {
+  if (!dragging) return;
+  dragging = false;
+  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+
+  const speed = Math.hypot(velX, velY);
+  if (speed > 5) {
+    const impulse = camRight().multiplyScalar(velX * 3.0)
+      .add(camUp().multiplyScalar(-velY * 3.0));
+    const q = cube.quaternion;
+    mod._ps_add_jerk(q.x, q.y, q.z, q.w, impulse.x, impulse.y, impulse.z);
+    // A shake is also where curls come from -- section 2.2's "high-pass container acceleration
+    // exceeds a threshold". Spawned here rather than inside the field so the threshold stays a
+    // property of the input device, which is what actually differs between a mouse and an IMU.
+    const inv = cube.quaternion.clone().invert();
+    const axis = new THREE.Vector3(impulse.x, impulse.y, impulse.z).applyQuaternion(inv).normalize();
+    mod._ps_ink_vortons(0, 0, 0, axis.x, axis.y, axis.z, 9.0, Math.min(1400, speed * 40), 300);
+  }
+};
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+
+// --- frame loop ------------------------------------------------------------
+const el = {
+  fps: document.getElementById('fps'), sim: document.getElementById('sim'),
+  render: document.getElementById('render'), peak: document.getElementById('peak'),
+  curls: document.getElementById('curls'),
+};
+let prev = performance.now(), fpsAcc = 0, fpsN = 0, hudAt = 0;
+
+function frame(now) {
+  const dt = Math.min((now - prev) / 1000, 0.25);
+  prev = now;
+
+  const q = cube.quaternion;
+  mod._ps_set_orientation(q.x, q.y, q.z, q.w);
+
+  if (pouring) {
+    const u = objectUp();
+    const p = u.clone().multiplyScalar(WORLD * 0.38);
+    mod._ps_ink_inject(p.x, p.y, p.z, 3.5, pouring - 1, 90);
+  }
+
+  const t0 = performance.now();
+  mod._ps_advance(dt);
+  const t1 = performance.now();
+  mod._ps_render();
+  const t2 = performance.now();
+  mod._ps_set_stats_timing(t1 - t0, t2 - t1);
+
+  for (const p of panels) p.tex.needsUpdate = true;
+
+  controls.update();
+  render();
+
+  fpsAcc += dt; fpsN++;
+  if (now - hudAt > 250) {
+    hudAt = now;
+    const s = new Float32Array(mod.HEAPF32.buffer, mod._ps_stats(), 4);
+    el.fps.textContent = (fpsN / fpsAcc).toFixed(0);
+    el.sim.textContent = s[0].toFixed(2);
+    el.render.textContent = s[1].toFixed(2);
+    el.peak.textContent = String(mod._ps_ink_peak());
+    el.curls.textContent = String(mod._ps_ink_vorton_count());
+    fpsAcc = 0; fpsN = 0;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>

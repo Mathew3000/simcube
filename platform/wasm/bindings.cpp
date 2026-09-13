@@ -239,6 +239,78 @@ PS_EXPORT void ps_set_scene(int id) { if (g_ready) g_sim.setScene(id); }
 // Cheaper and simpler than marshalling strings, and the table lives in rodata anyway.
 PS_EXPORT const char* ps_scene_name(int id) { return sceneAt(id).name; }
 
+// --- ink -----------------------------------------------------------------------------------
+// Exported unconditionally so a page can ASK whether this module has ink, rather than failing to
+// find the symbol and dying. ps_ink_enabled() is the whole protocol.
+PS_EXPORT int ps_ink_enabled() {
+#if PARTSIM_ENABLE_INK
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+PS_EXPORT int ps_ink_dim() {
+#if PARTSIM_ENABLE_INK
+  return kInkDim;
+#else
+  return 0;
+#endif
+}
+
+PS_EXPORT int ps_ink_channels() {
+#if PARTSIM_ENABLE_INK
+  return kInkChannels;
+#else
+  return 0;
+#endif
+}
+
+// Object-space position, world units. The browser rotates the OBJECT and leaves gravity pointing
+// world-down, so a drop aimed at the top of the screen has to arrive here already in the cube's
+// own frame -- the caller passes object coordinates, same as every other entry point.
+PS_EXPORT void ps_ink_inject(float x, float y, float z, float radius, int channel, int amount) {
+#if PARTSIM_ENABLE_INK
+  if (g_ready) g_sim.injectInk(Vec3{x, y, z}, radius, channel, amount);
+#else
+  (void)x; (void)y; (void)z; (void)radius; (void)channel; (void)amount;
+#endif
+}
+
+PS_EXPORT void ps_ink_vortons(float x, float y, float z, float ax, float ay, float az,
+                              float radius, int strength, int life) {
+#if PARTSIM_ENABLE_INK
+  if (g_ready) g_sim.spawnInkVortons(Vec3{x, y, z}, Vec3{ax, ay, az}, radius, strength, life);
+#else
+  (void)x; (void)y; (void)z; (void)ax; (void)ay; (void)az;
+  (void)radius; (void)strength; (void)life;
+#endif
+}
+
+PS_EXPORT void ps_ink_clear() {
+#if PARTSIM_ENABLE_INK
+  if (g_ready) g_sim.clearInk();
+#endif
+}
+
+// Peak concentration, 0 when the volume is clear. The page uses it to show whether anything is
+// actually in there, which is the first question when a render comes up black.
+PS_EXPORT int ps_ink_peak() {
+#if PARTSIM_ENABLE_INK
+  return g_ready ? (int)g_sim.ink().peak() : 0;
+#else
+  return 0;
+#endif
+}
+
+PS_EXPORT int ps_ink_vorton_count() {
+#if PARTSIM_ENABLE_INK
+  return g_ready ? g_sim.ink().vortonCount() : 0;
+#else
+  return 0;
+#endif
+}
+
 PS_EXPORT void ps_set_auto_cycle(int on) { if (g_ready) g_sim.setAutoCycle(on != 0); }
 PS_EXPORT int ps_auto_cycle() { return (g_ready && g_sim.autoCycle()) ? 1 : 0; }
 

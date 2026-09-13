@@ -80,6 +80,12 @@ class Renderer {
 #if PARTSIM_INTERNAL_PIXELS
   // clear -> splat particles -> splat heat -> resolve every driven panel into the RGBA buffers.
   void render(ParticleView p, HeatView f, const Geometry& g);
+  // Resolve what is already accumulated into the internal buffers, without splatting first.
+  //
+  // Exists because a caller that composites something extra -- the ink projection, the beaker
+  // overlay -- needs to get between accumulate() and resolve(), and render() does both in one
+  // call. Without this the ink would be splatted after the resolve and never appear.
+  void resolveAll();
   template <class F>
   void render(const Particles& p, const F& f, const Geometry& g) {
     render(p.view(), f.view(), g);

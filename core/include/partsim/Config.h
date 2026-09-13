@@ -544,6 +544,11 @@ constexpr int kMaxVortons = PARTSIM_MAX_VORTONS;
 
 // Grid coordinates are Q8.8 throughout the cell loop: 8 fractional bits is one 256th of a cell,
 // and the trilinear weights derived from them sum to exactly 256.
+// Field updates per second. Twenty, against the solver's sixty: section 2.3 of the design
+// document, and the rate every cost figure in section 13 is quoted at.
+constexpr int kInkHz = 20;
+constexpr int kInkStepMs = 1000 / kInkHz;
+
 constexpr int kInkFracBits = 8;
 constexpr int kInkOne = 1 << kInkFracBits;
 
