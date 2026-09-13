@@ -1157,6 +1157,18 @@ it cannot point outward however the particle happened to cross the plane.
 `injectSpill` returns false when the pool is full. In a closed ring that is volume that never comes
 back, so it is a return value the caller must count, the same way `SpillQueue` counts `dropped`.
 
+**What it looks like**, which is the half no count can answer and the reason the handoff asked for
+a render. A red beaker held at 115° pouring into a blue one, six frames of `spill_ppm` at the
+beaker tier:
+
+- **It is a stream, not a burst.** At step 120 the remaining red in the sending cube is pooled
+  against the low side, with a narrow vertical red column running up the top face and down the
+  bottom — the liquid crossing the box toward the rim, seen edge-on. One or two texels wide, and
+  continuous from frame to frame rather than particles winking out at the lip.
+- **It arrives as a pour.** Red enters at the top of the receiving net and falls through blue, with
+  the pool below already magenta and blue still at the edges — and it arrives in the corner it left
+  from, which is exactly what the object-space coordinates above buy.
+
 ### D59. A vessel with a hole in it has no population target **[STANDS]**
 
 `advanceTransition` keeps the particle count at the current scene's target, adding or removing 32 a
