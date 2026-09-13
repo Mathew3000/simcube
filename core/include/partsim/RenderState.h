@@ -41,6 +41,21 @@ struct ParticleView {
   int n;
 };
 
+// Everything the ink projection reads. One buffer per dye channel, because advection needs two
+// and drawing needs one -- the same seam HeatView is, for the same reason.
+//
+// Note what is NOT here: the vortons and the flow phase. A display node composites concentration;
+// it never evaluates the velocity field, so the procedural flow stays entirely on the master.
+struct InkView {
+  const uint8_t* dye[kInkChannels];  // each dim.x*dim.y*dim.z, row-major with x fastest
+  IVec3 dim;
+  Vec3 lo;     // world position of the low corner of cell (0,0,0)
+  float cell;  // world units per cell
+  bool empty;  // no dye anywhere: the whole pass is skipped
+
+  int index(int x, int y, int z) const { return (z * dim.y + y) * dim.x + x; }
+};
+
 // Everything the heat splat reads. One buffer, because advection needs two and drawing needs one.
 struct HeatView {
   const uint8_t* cells;  // dim.x * dim.y * dim.z, row-major with x fastest

@@ -1,5 +1,6 @@
 #pragma once
 #include "partsim/FieldGrid.h"
+#include "partsim/InkField.h"
 #include "partsim/Palette.h"
 #include "partsim/Particles.h"
 #include "partsim/Geometry.h"
@@ -93,6 +94,22 @@ class Renderer {
   // Heat cells splat through the SAME path as particles, into the heat channel, so flame and
   // fluid composite consistently and the palette stays the only place colour is decided.
   void splatField(HeatView f, const Geometry& g);
+
+  // Six low-resolution volume projections of the dye field, upscaled into the accumulators.
+  //
+  // Not a splat. The particle path costs O(particles x footprint) and is the right shape for a
+  // sparse pool; a dense field splatted the same way would touch every panel texel for every
+  // occupied cell. This walks one column of the field per INTERMEDIATE texel instead, composites
+  // front to back, and bilinearly upscales kInkDim x kInkDim to the panel. Cost is therefore
+  // independent of panel resolution until the upscale: six faces visit 6 * kInkDim^3 samples, and
+  // a display node driving two visits a third of that.
+  //
+  // Writes the same channels the particle path does -- weight for brightness, chroma for colour --
+  // so resolve(), the palette, the quantisation and the blit are all unchanged.
+#if PARTSIM_ENABLE_INK
+  void splatInk(InkView f, const Geometry& g);
+  void splatInk(const InkField& f, const Geometry& g);
+#endif
 
   // Convenience overloads for callers holding the full types. Thin adapters, not a second path.
   void splat(const Particles& p, const Geometry& g) { splat(p.view(), g); }
@@ -197,6 +214,28 @@ class Renderer {
   // Kernel half-width in texels, derived from kSplatRadiusWorld and the panel pitch in init().
   // At pitch 1.0 this is 2, the value it used to be hardcoded to.
   int footprint_ = 2;
+
+  // Which field axis each panel axis runs along, and in which direction, for the six axis-aligned
+  // faces. Precomputed at init from the panel basis: deriving it per texel would be both slower
+  // and a place for a per-face transpose to hide, and a transposed face is hard to see on a cube
+  // whose contents are roughly symmetric.
+#if PARTSIM_ENABLE_INK
+  struct InkColumns {
+    int8_t uAxis, vAxis, dAxis;
+    int8_t uSign, vSign, dSign;
+    bool valid;  // false when the panel is not axis-aligned; that face is then skipped
+  };
+  InkColumns inkCols_[kMaxRenderPanels];
+  void buildInkTables(const Geometry& g);
+  // Concentration sum -> opacity, and its reciprocal, so the colour mix needs no divide. The
+  // reciprocal table is the one docs/DESIGN-SUGGESTIONS.md section 3.1 originally hid a divide
+  // behind: on a host it is worth 6%, and the target has no divider at all.
+  uint8_t inkOpacity_[kInkSumMax + 1];
+  uint16_t inkRecip_[kInkSumMax + 1];
+  // One face's intermediate image: opacity, r, g, b. Reused across faces, so this is 1 KB total
+  // rather than one per driven panel.
+  uint8_t inkFace_[kInkDim * kInkDim * 4];
+#endif
 #if PARTSIM_ENABLE_CHROMA
   // Kernel-LUT index at the chroma radius: a texel is inside the narrow disc when its kq is below
   // this, so the test is one compare on a value the weight splat has already computed.

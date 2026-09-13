@@ -79,6 +79,10 @@ class InkField {
 
   int vortonCount() const;
 
+  // Read-only view for the renderer, so the projection is identical whether the dye was advected
+  // here or arrived over a wire. Defined in RenderState.cpp, as FieldGrid::view() is.
+  struct InkView view() const;
+
   // Forces a full-grid update instead of the tracked active box. Exists for the test that asserts
   // the two agree bit for bit -- an active-bounds bug is otherwise invisible until a tendril is
   // silently clipped.

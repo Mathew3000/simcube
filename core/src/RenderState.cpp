@@ -1,5 +1,7 @@
 #include "partsim/RenderState.h"
 
+#include "partsim/InkField.h"
+
 #include "partsim/FieldGrid.h"
 
 namespace partsim {
@@ -62,6 +64,16 @@ ParticleView Particles::view() const {
 
 HeatView FieldGrid::view() const {
   return HeatView{cur_, dim_, lo_, cell_, peak_ == 0};
+}
+
+InkView InkField::view() const {
+  InkView v;
+  for (int c = 0; c < kInkChannels; ++c) v.dye[c] = dye_[cur_][c];
+  v.dim = IVec3{kInkDim, kInkDim, kInkDim};
+  v.lo = lo_;
+  v.cell = cell_;
+  v.empty = (peak_ == 0);
+  return v;
 }
 
 }  // namespace partsim

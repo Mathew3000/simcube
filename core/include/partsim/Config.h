@@ -499,7 +499,20 @@ struct MaterialParams {
 // A dye concentration grid advected by a procedural flow, as an alternative to simulating the
 // carrier liquid as particles. Off unless a tier asks for it, and it costs nothing when off.
 #ifndef PARTSIM_ENABLE_INK
+// On where memory is free and the tests run; off on a device profile unless its tier asks for it.
+// The projection's response LUTs and intermediate image are ~2.5 KB that a water-only cube would
+// carry and never touch -- the same argument W1 made for sand and fire, which is that this pays in
+// MEMORY and not in tidiness.
+//
+// Consequence worth knowing: the ink path is then not compiled by the device builds in
+// scripts/check_esp32_build.sh, so a break in it would not be caught there. It will be, once the
+// tier compiles the PBF pools out and earns a row in the budget matrix (Phase C).
+#if defined(PARTSIM_PROFILE_ESP32) || defined(PARTSIM_PROFILE_ESP32_MASTER) || \
+    defined(PARTSIM_PROFILE_ESP32_DISPLAY)
 #define PARTSIM_ENABLE_INK 0
+#else
+#define PARTSIM_ENABLE_INK 1
+#endif
 #endif
 
 // Sixteen cells across the cube, deliberately BELOW the panel resolution: trilinear advection,
@@ -533,6 +546,26 @@ constexpr int kMaxVortons = PARTSIM_MAX_VORTONS;
 // and the trilinear weights derived from them sum to exactly 256.
 constexpr int kInkFracBits = 8;
 constexpr int kInkOne = 1 << kInkFracBits;
+
+// How opaque a fully saturated cell is, per 256. Below 256 the densest dye still lets a little of
+// what is behind it through, which is what stops a plume reading as a solid painted object.
+constexpr int kInkOpacityGain = 200;
+
+// The largest channel sum the compositor can see, and so the size of its LUTs.
+constexpr int kInkSumMax = 255 * kInkChannels;
+
+// What each dye channel looks like. Constants for now, and deliberately not in the Palette: the
+// palette's ramps map INTENSITY to colour, whereas these are the endpoints a concentration ratio
+// mixes between. Scene data when there is a scene that wants to choose them.
+constexpr uint8_t kInkDyeColour[kInkChannels][3] = {
+    {230, 40, 40},   // A: red
+#if PARTSIM_INK_CHANNELS > 1
+    {40, 70, 230},   // B: blue -- with A, mixes through magenta rather than through grey
+#endif
+#if PARTSIM_INK_CHANNELS > 2
+    {60, 200, 80},   // C
+#endif
+};
 
 // --- rendering -------------------------------------------------------------
 constexpr float kSplatInfluence = 8.0f;  // depth beyond which a particle lights nothing

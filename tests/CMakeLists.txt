@@ -9,6 +9,7 @@ add_executable(partsim_tests
   test_sand.cpp
   test_field.cpp
   test_ink.cpp
+  test_ink_render.cpp
   test_noalloc.cpp
   test_motion.cpp
   test_chainmap.cpp

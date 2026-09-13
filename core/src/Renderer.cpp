@@ -90,9 +90,63 @@ bool Renderer::init(const Geometry& g, const int* panels, int count) {
   }
   kernel_[kKernelSize] = 0;
 
+#if PARTSIM_ENABLE_INK
+  buildInkTables(g);
+#else
+  (void)g;
+#endif
+
   clear();
   return true;
 }
+
+#if PARTSIM_ENABLE_INK
+// Concentration response and the reciprocal that keeps the colour mix divide-free, plus the
+// per-face mapping from panel axes to field axes.
+void Renderer::buildInkTables(const Geometry& g) {
+  inkOpacity_[0] = 0;
+  inkRecip_[0] = 0;
+  for (int i = 1; i <= kInkSumMax; ++i) {
+    // Linear to saturation for now. Section 3.2 of the design document wants a curve with bright
+    // cores and still-visible faint wisps; that is a tuning decision and it needs the visual
+    // fixtures to tune against, so it is deliberately not guessed at here.
+    inkOpacity_[i] = (uint8_t)imin(255, (i * kInkOpacityGain) >> 8);
+    inkRecip_[i] = (uint16_t)imin(65535, 65536 / i);
+  }
+
+  for (int sIdx = 0; sIdx < renderCount_; ++sIdx) {
+    InkColumns& c = inkCols_[sIdx];
+    c.valid = false;
+    const Panel& pan = g.at(panelOf_[sIdx]);
+    // Dominant axis of each basis vector. On an axis-aligned cube these are exact unit vectors,
+    // and anything else is rejected rather than approximated -- a projection through a tilted
+    // panel would silently shear the field.
+    const Vec3 basis[3] = {pan.u, pan.v, pan.n};
+    int8_t axis[3], sign[3];
+    bool ok = true;
+    int seen = 0;
+    for (int b = 0; b < 3 && ok; ++b) {
+      const float a[3] = {basis[b].x, basis[b].y, basis[b].z};
+      int best = 0;
+      for (int k = 1; k < 3; ++k)
+        if (pabs(a[k]) > pabs(a[best])) best = k;
+      const float mag = length(basis[b]);
+      // Every off-axis component must be negligible against the dominant one.
+      for (int k = 0; k < 3; ++k)
+        if (k != best && pabs(a[k]) > 0.001f * mag) ok = false;
+      axis[b] = (int8_t)best;
+      sign[b] = (int8_t)(a[best] >= 0.0f ? 1 : -1);
+      seen |= 1 << best;
+    }
+    if (!ok || seen != 0x7) continue;  // not axis-aligned, or two basis vectors on one axis
+
+    c.uAxis = axis[0]; c.uSign = sign[0];
+    c.vAxis = axis[1]; c.vSign = sign[1];
+    c.dAxis = axis[2]; c.dSign = sign[2];
+    c.valid = true;
+  }
+}
+#endif  // PARTSIM_ENABLE_INK
 
 void Renderer::clear() {
   for (int k = 0; k < renderCount_; ++k) {
@@ -385,6 +439,113 @@ void Renderer::splatField(HeatView f, const Geometry& g) {
   }
 #endif
 }
+
+#if PARTSIM_ENABLE_INK
+void Renderer::splatInk(const InkField& f, const Geometry& g) { splatInk(f.view(), g); }
+
+void Renderer::splatInk(InkView f, const Geometry& g) {
+  if (f.empty) return;  // a clear volume costs one branch
+  const int n = f.dim.x;
+  // The intermediate is one texel per field cell, which is what makes the column walk a direct
+  // index rather than a trilinear sample. A field that is not cubic would need the general path.
+  if (n != kInkDim || f.dim.y != kInkDim || f.dim.z != kInkDim) return;
+
+  for (int s = 0; s < renderCount_; ++s) {
+    const InkColumns& c = inkCols_[s];
+    if (!c.valid) continue;
+    const Panel& pan = g.at(panelOf_[s]);
+
+    // --- one column per intermediate texel, composited front to back -------------------------
+    for (int iv = 0; iv < kInkDim; ++iv) {
+      for (int iu = 0; iu < kInkDim; ++iu) {
+        int coord[3];
+        coord[c.uAxis] = (c.uSign > 0) ? iu : (kInkDim - 1 - iu);
+        coord[c.vAxis] = (c.vSign > 0) ? iv : (kInkDim - 1 - iv);
+
+        int trans = 255, cr = 0, cg = 0, cb = 0;
+        for (int d = 0; d < kInkDim; ++d) {
+          // Depth runs inward from this face, so opposite faces walk the same field in opposite
+          // order -- which is the whole reason one shared volume reads correctly from six sides.
+          coord[c.dAxis] = (c.dSign > 0) ? d : (kInkDim - 1 - d);
+          const int idx = f.index(coord[0], coord[1], coord[2]);
+
+          int sum = 0, mix[3] = {0, 0, 0};
+          for (int ch = 0; ch < kInkChannels; ++ch) {
+            const int m = f.dye[ch][idx];
+            if (!m) continue;
+            sum += m;
+            mix[0] += m * kInkDyeColour[ch][0];
+            mix[1] += m * kInkDyeColour[ch][1];
+            mix[2] += m * kInkDyeColour[ch][2];
+          }
+          if (sum == 0) continue;  // clear carrier liquid: most of a young plume exits here
+
+          const int alpha = inkOpacity_[sum];
+          const int contrib = (trans * alpha) >> 8;
+          if (contrib > 0) {
+            // Colour is the concentration-weighted mix of the dye colours. The division by `sum`
+            // that normalises it comes from a LUT: section 2.3's no-divide rule applies here too.
+            const int rcp = inkRecip_[sum];
+            cr += (((mix[0] >> 8) * rcp) >> 8) * contrib >> 8;
+            cg += (((mix[1] >> 8) * rcp) >> 8) * contrib >> 8;
+            cb += (((mix[2] >> 8) * rcp) >> 8) * contrib >> 8;
+          }
+          trans -= (trans * alpha) >> 8;
+          if (trans <= 3) break;  // effectively opaque; nothing behind it can show through
+        }
+
+        uint8_t* o = &inkFace_[(iv * kInkDim + iu) * 4];
+        o[0] = (uint8_t)iclamp(255 - trans, 0, 255);
+        o[1] = (uint8_t)imin(255, cr);
+        o[2] = (uint8_t)imin(255, cg);
+        o[3] = (uint8_t)imin(255, cb);
+      }
+    }
+
+    // --- bilinear upscale into the accumulators ----------------------------------------------
+    // kInkDim is below the panel resolution on purpose; this is what hides the grid. Sampling at
+    // texel centres in both spaces, so the image is not shifted half an intermediate texel.
+    const int w = (int)pan.w, h = (int)pan.h;
+    uint16_t* dst = accum_[s];
+    // Weight such that resolve()'s level is the opacity itself: the field already states how
+    // opaque a column is, so exposure is not the knob for it.
+    const int wScale = (int)(fullScale_ * (256.0f / 255.0f));
+    for (int j = 0; j < h; ++j) {
+      const int fy = ((j * 2 + 1) * kInkDim * 128) / h - 128;  // Q8, centre-to-centre
+      const int y0 = iclamp(fy >> 8, 0, kInkDim - 1);
+      const int y1 = imin(y0 + 1, kInkDim - 1);
+      const int ty = iclamp(fy - (y0 << 8), 0, 255);
+      for (int i = 0; i < w; ++i) {
+        const int fx = ((i * 2 + 1) * kInkDim * 128) / w - 128;
+        const int x0 = iclamp(fx >> 8, 0, kInkDim - 1);
+        const int x1 = imin(x0 + 1, kInkDim - 1);
+        const int tx = iclamp(fx - (x0 << 8), 0, 255);
+
+        const uint8_t* p00 = &inkFace_[(y0 * kInkDim + x0) * 4];
+        const uint8_t* p10 = &inkFace_[(y0 * kInkDim + x1) * 4];
+        const uint8_t* p01 = &inkFace_[(y1 * kInkDim + x0) * 4];
+        const uint8_t* p11 = &inkFace_[(y1 * kInkDim + x1) * 4];
+
+        int v[4];
+        for (int k = 0; k < 4; ++k) {
+          const int a = p00[k] + (((p10[k] - p00[k]) * tx) >> 8);
+          const int b = p01[k] + (((p11[k] - p01[k]) * tx) >> 8);
+          v[k] = a + (((b - a) * ty) >> 8);
+        }
+        if (v[0] == 0) continue;
+
+        uint16_t* row = dst + (std::size_t)(j * w + i) * kChannelCount;
+        row[kChWater] = satAdd(row[kChWater], (v[0] * wScale) >> 8);
+#if PARTSIM_ENABLE_CHROMA
+        row[kChCR] = satAdd(row[kChCR], v[1]);
+        row[kChCG] = satAdd(row[kChCG], v[2]);
+        row[kChCB] = satAdd(row[kChCB], v[3]);
+#endif
+      }
+    }
+  }
+}
+#endif  // PARTSIM_ENABLE_INK
 
 void Renderer::accumulate(ParticleView p, HeatView f, const Geometry& g) {
   clear();
