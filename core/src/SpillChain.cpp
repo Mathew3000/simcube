@@ -16,6 +16,16 @@ NullTransport g_null;
 
 SpillTransport& nullSpillTransport() { return g_null; }
 
+void SpillChain::setChainPosition(int id, int length) {
+  len_ = length < 0 ? 0 : length;
+  id_ = (len_ > 0) ? ((id % len_) + len_) % len_ : 0;
+  // The cumulative count belonged to whoever used to be upstream. Kept, it reads as a shortfall of
+  // everything that cube had ever poured, and the beaker would be filled with clones to match.
+  rx_ = SpillReceiver{};
+  owed_ = 0;
+  haveLast_ = false;
+}
+
 void SpillChain::pump(Simulation& sim, SpillTransport& t) {
   // No open face is no beaker: nothing can leave, nothing can be let in, and an arrival would be
   // rejected by injectSpill anyway. Returning here rather than polling-and-discarding means a
@@ -30,6 +40,7 @@ void SpillChain::pump(Simulation& sim, SpillTransport& t) {
     const int n = (q.count - i < kSpillMaxPerPacket) ? q.count - i : kSpillMaxPerPacket;
     SpillHeader h;
     h.seq = ++seq_;
+    h.from = (uint8_t)id_;
     // The sender's cumulative count AT THE END OF THIS PACKET, not at the end of the frame --
     // otherwise every packet but the last would claim particles it had not sent yet and the
     // receiver would report a shortfall that closed itself one packet later.
@@ -60,6 +71,11 @@ void SpillChain::pump(Simulation& sim, SpillTransport& t) {
     const int m = decodeSpill(packet_, len, box, decoded_, kSpillMaxPerPacket, h);
     if (m < 0) {
       ++stats_.bad;  // not ours, or damaged -- decodeSpill validated before writing anything
+      continue;
+    }
+    // Broadcast means every cube hears the whole ring; only one of them is pouring into this one.
+    if (len_ > 1 && (int)h.from != upstream()) {
+      ++stats_.foreign;
       continue;
     }
     ++stats_.packetsIn;

@@ -75,7 +75,19 @@ simulation of one.
 `SpillChain::pump(sim, transport)` is then called once per step, and the cadence matters — see
 trap 5.
 
-### E3. The page
+### E3. Address the ring, or it will duplicate
+
+`SpillChain::setChainPosition(id, length)` decides whose pour a cube stands under. **Call it for
+every beaker.** The transport is a broadcast — on hardware literally so — and an unaddressed ring
+of three has every beaker inject what both of the others poured: measured at **150 particles
+becoming 200 out of nothing** (`DECISIONS.md` D66). A length below 2 means unaddressed and accepts
+everything, which is why two beakers work without it and three do not.
+
+If your JS delivers packets point-to-point rather than broadcasting, addressing costs you nothing
+and still holds — but then say so, because the hardware does not have that option and the browser
+is supposed to be the place its behaviour gets debugged.
+
+### E4. The page
 
 `platform/wasm/web/nodes.html` is the closest existing model: several module-side instances, JS
 carrying the bytes between them, per-instance state on screen. Build `beakers.html` beside it.
@@ -85,7 +97,8 @@ carrying the bytes between them, per-instance state on screen. Build `beakers.ht
 - per-beaker **colour picker**, **fill readout**, and the beaker's current *mixed* colour
 - fault injection: drop a packet, delay it, corrupt a byte, and watch the shortfall get made up
   rather than the ring silently draining
-- the chain order visible, since it is the thing a user configures on real cubes
+- the chain order visible, since it is the thing a user configures on real cubes (`n <id> <len>`
+  on hardware), including what happens when it is wrong
 
 ---
 

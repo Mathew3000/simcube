@@ -307,6 +307,7 @@ void App::printHelp() {
   c.println("  p            pause/resume the physics");
   c.println("  x            benchmark: particle sweep, needs no panels attached");
   c.println("  o <x> <y> <z>  tilt: set object-space gravity by hand (whole numbers, 0 0 -1 etc)");
+  c.println("  n <id> <len>   this cube's place in the chain (n 1 3 = second of three)");
 #if PARTSIM_ENABLE_CHROMA
   c.println("  d <r> <g>    this beaker's dye, 0-255 each (255 0 red, 0 255 green, 0 0 blue)");
 #endif
@@ -362,6 +363,10 @@ void App::printStats() {
     const SpillChain::Stats& cs = chain_.stats();
     c.printf("beaker: open face %d, spilled %u (%u dropped by the queue)\n", sim_.openFace(),
              (unsigned)sim_.spill().totalOut, (unsigned)sim_.spill().dropped);
+    if (chain_.chainLength() > 1)
+      c.printf("chain position: cube %d of %d, taking from cube %d (%u packets ignored as not"
+               " upstream)\n",
+               chain_.chainId(), chain_.chainLength(), chain_.upstream(), (unsigned)cs.foreign);
     c.printf("chain %s: out %u in %u packets, in %u in %u packets, bad %u\n", plat_.chain->name(),
              (unsigned)cs.particlesOut, (unsigned)cs.packetsOut, (unsigned)cs.particlesIn,
              (unsigned)cs.packetsIn, (unsigned)cs.bad);
@@ -586,6 +591,23 @@ void App::handleLine(char* line) {
       }
       c.printf("dye %u %u (of 255; blue is what is left)\n", (unsigned)(sim_.dyeR() / 256),
                (unsigned)(sim_.dyeG() / 256));
+      break;
+#endif
+
+#ifndef PARTSIM_PROFILE_ESP32_DISPLAY
+    case 'n':
+      // Which cube this one stands under. The radio broadcasts, so without this every cube in
+      // earshot injects every other cube's pour and a ring of three GAINS volume out of nothing --
+      // measured at 150 particles becoming 200 (chain_an_unaddressed_ring_duplicates_what_it_hears).
+      //
+      // Not persisted across a reboot yet; see M4-E, which is where the configuration surface for
+      // a chain belongs.
+      if (argc >= 3) chain_.setChainPosition(atoi(argv[1]), atoi(argv[2]));
+      if (chain_.chainLength() > 1)
+        c.printf("chain: cube %d of %d, taking from cube %d\n", chain_.chainId(),
+                 chain_.chainLength(), chain_.upstream());
+      else
+        c.println("chain: unaddressed -- this cube takes packets from anyone");
       break;
 #endif
 

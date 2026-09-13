@@ -1225,3 +1225,30 @@ what it had just poured out.
 It was not that: the packets came from the other board's pre-reset life, before the test script's
 port open rebooted it. `EspNowLink::diagnostic()` now prints the node's own MAC beside the last
 sender's, marked `<-- ITSELF` if they ever match. Over two clean runs they never did.
+
+### D66. A cube takes packets from its upstream neighbour, not from whoever is loudest **[MEASURED]**
+
+The chain broadcasts. With two cubes that is harmless and it is what the two-board bring-up proved;
+with three it is a volume leak running the *opposite* way from a dropped packet. Every cube hears
+every packet, so every cube injects what **both** of the others poured, and the ring fills up out of
+nothing.
+
+Measured on a three-beaker host fixture, one cube tilted: unaddressed, **150 particles became
+200**. Addressed, 150 stayed 150, with the cube that was not downstream counting 25 packets heard
+and ignored.
+
+The sender's position rides in the header byte that has always been written as `0` and documented
+as "flags, reserved" — so the format does not grow, and a cube that has never been told where it
+stands sends the same bytes it always did. Length below 2 means unaddressed and accepts everyone,
+which is what a bench with two boards wants and what every existing caller gets for free.
+
+Changing the position **re-baselines the receiver**. The cumulative count it was tracking belonged
+to whoever used to be upstream; carried over, it reads as a shortfall of everything that cube had
+ever poured, and the beaker would be filled with clones to match.
+
+Confirmed on hardware across a position change mid-pour: as cube 1 of 3 it took 102 of 102
+particles (307 → 409 exactly); re-addressed as cube 2 of 3 it ignored **59 packets** carrying the
+remaining 205 particles and its count did not move.
+
+Console command `n <id> <len>`. It does not survive a reboot — chain order and per-cube colour as
+persistent configuration belong with M4-E, which is where the configuration surface is.

@@ -80,7 +80,7 @@ int encodeSpill(const SpillHeader& h, const SpillParticle* items, int n, const A
 
   put16(out + 0, kSpillMagic);
   out[2] = kSpillVersion;
-  out[3] = 0;  // flags, reserved
+  out[3] = h.from;  // the sender's chain position; 0 is what "reserved" used to encode
   put32(out + 4, h.seq);
   // The sender's cumulative spill count, and the field the receiver's shortfall arithmetic is
   // built on: it advances by every particle the sender has ever released, so a receiver that has
@@ -98,6 +98,7 @@ int decodeSpill(const uint8_t* in, int len, const Aabb& box, SpillParticle* out,
   if (in[2] != kSpillVersion) return -1;
   if (fletcher16(in, 14) != get16(in + 14)) return -1;
 
+  h.from = in[3];
   h.seq = get32(in + 4);
   h.totalOut = get32(in + 8);
   h.count = get16(in + 12);

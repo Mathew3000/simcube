@@ -57,9 +57,28 @@ class SpillChain {
     // queue per STEP, so a pump after the loop caught half the pour -- 98 of 198 -- and every
     // count downstream still added up.
     uint32_t unsent = 0;
+    // Packets from a cube that is not this one's upstream neighbour. Expected, not an error: on a
+    // broadcast every cube hears the whole ring. A count of zero on a ring of three or more means
+    // the addressing is not doing anything, which is worth being able to see.
+    uint32_t foreign = 0;
   };
 
   void pump(Simulation& sim, SpillTransport& t);
+
+  // Where this cube sits in the ring, and how long the ring is.
+  //
+  // A chain is an ORDER the user configures, not a set of pairings: the radio broadcasts, so this
+  // is what decides whose pour a cube is standing under. Unset (or a length below 2) accepts every
+  // packet from anyone, which is what a bench with two boards wants and what every existing caller
+  // gets without saying anything.
+  //
+  // Changing it re-baselines the receiver: the cumulative count it was tracking belonged to a
+  // different sender, and carrying it over would read as one enormous shortfall.
+  void setChainPosition(int id, int length);
+  int chainId() const { return id_; }
+  int chainLength() const { return len_; }
+  // Whose packets this cube takes. -1 when it takes everyone's.
+  int upstream() const { return len_ > 1 ? (id_ + len_ - 1) % len_ : -1; }
 
   const Stats& stats() const { return stats_; }
   // Particles known lost and not yet re-created. Drains over subsequent frames rather than all at
@@ -73,6 +92,8 @@ class SpillChain {
   SpillReceiver rx_;
   Stats stats_;
   uint32_t seq_ = 0;
+  int id_ = 0;
+  int len_ = 0;
   uint32_t packetised_ = 0;  // cumulative particles taken out of the outbound queue
   uint32_t owed_ = 0;
   // The last arrival seen, which is the template a made-up particle is copied from: the lost

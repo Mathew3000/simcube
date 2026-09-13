@@ -92,6 +92,16 @@ struct SpillHeader {
   uint32_t seq = 0;       // packet counter, so a receiver can spot a gap
   uint32_t totalOut = 0;  // the SENDER's cumulative spill count at the end of this packet
   uint16_t count = 0;     // particles in this packet
+  // The sender's POSITION IN THE CHAIN, in the byte the header has always reserved for flags.
+  //
+  // The radio is a broadcast: every cube in earshot hears every packet. With two cubes that is
+  // harmless, and with three it is a volume leak in the opposite direction from a dropped packet
+  // -- each cube would inject what BOTH of the others poured, and the ring would fill up out of
+  // nothing. A receiver takes packets from its upstream neighbour and ignores the rest.
+  //
+  // Zero by default, which is what this byte encoded before it meant anything, so a cube that has
+  // never been told its position speaks and is heard exactly as it was.
+  uint8_t from = 0;
 };
 
 // Returns bytes written, or 0 if it did not fit or n exceeds kSpillMaxPerPacket.

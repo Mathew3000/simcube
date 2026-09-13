@@ -66,7 +66,32 @@ class Wire final : public SpillTransport {
   Pipe* rx_;
 };
 
-// ~1.2MB each; static storage only.
+// A broadcast medium: what one cube sends, every OTHER cube hears. That is what the radio does,
+// and it is the whole reason a packet has to say who it came from.
+struct Bus {
+  static constexpr int kNodes = 3;
+  Pipe in[kNodes];
+  void broadcast(int from, const uint8_t* b, int len) {
+    for (int i = 0; i < kNodes; ++i)
+      if (i != from) in[i].put(b, len);
+  }
+};
+
+class BusWire final : public SpillTransport {
+ public:
+  BusWire(Bus* bus, int me) : bus_(bus), me_(me) {}
+  bool send(const uint8_t* b, int len) override {
+    bus_->broadcast(me_, b, len);
+    return true;
+  }
+  int poll(uint8_t* out, int cap) override { return bus_->in[me_].take(out, cap); }
+
+ private:
+  Bus* bus_;
+  int me_;
+};
+
+// ~3.2MB each; static storage only.
 Simulation g_a, g_b;
 Pipe g_pipe;          // A's outbound is B's inbound, and nothing comes back
 Wire g_wa{&g_pipe, nullptr};
@@ -317,4 +342,85 @@ TEST(chain_notices_spill_that_never_reached_a_packet) {
   g_ca.pump(g_a, g_wa);
   CHECK(g_ca.stats().unsent == 5u);
   CHECK(g_ca.stats().particlesOut == 10u);
+}
+
+// --- addressing: a broadcast is heard by everyone, and only one of them is downstream ---------
+
+namespace {
+Simulation g_c;
+Bus g_bus;
+BusWire g_bw0{&g_bus, 0}, g_bw1{&g_bus, 1}, g_bw2{&g_bus, 2};
+SpillChain g_k0, g_k1, g_k2;
+
+Simulation* const g_ring[3] = {&g_a, &g_b, &g_c};
+SpillChain* const g_chains[3] = {&g_k0, &g_k1, &g_k2};
+SpillTransport* const g_wires[3] = {&g_bw0, &g_bw1, &g_bw2};
+
+int ringTotal() { return g_a.particleCount() + g_b.particleCount() + g_c.particleCount(); }
+
+// `addressed` false is the state a cube ships in: it has never been told where it stands, so it
+// takes every packet it hears.
+void resetRing(bool addressed) {
+  g_bus = Bus{};
+  for (int i = 0; i < 3; ++i) {
+    CHECK(g_ring[i]->init(Simulation::kCube, particlesForFill(400), 0xB0A7u + (uint32_t)i, 32));
+    g_ring[i]->setOpenFace(kOpenPosY);
+    g_ring[i]->setGravityObject(Vec3{0.0f, -kGravityMag, 0.0f});
+    *g_chains[i] = SpillChain{};
+    if (addressed) g_chains[i]->setChainPosition(i, 3);
+  }
+}
+
+// Cube 0 is the only one tilted, so every particle on the air came from it.
+void ringStep(int s) {
+  g_a.setGravityObject(tiltAt(s));
+  for (int i = 0; i < 3; ++i) {
+    g_ring[i]->stepFixed();
+    g_chains[i]->pump(*g_ring[i], *g_wires[i]);
+  }
+}
+}  // namespace
+
+TEST(chain_a_ring_of_three_takes_only_from_upstream) {
+  resetRing(true);
+  const int start = ringTotal();
+  CHECK(g_k1.upstream() == 0);
+  CHECK(g_k2.upstream() == 1);
+  CHECK(g_k0.upstream() == 2);
+
+  for (int s = 0; s < settleSteps(600); ++s) ringStep(s);
+
+  const uint32_t out0 = g_k0.stats().particlesOut;
+  std::printf("       ring of three: 0 poured %u; 1 took %u (foreign %u), 2 took %u (foreign %u),"
+              " total %d -> %d\n",
+              out0, g_k1.stats().particlesIn, g_k1.stats().foreign, g_k2.stats().particlesIn,
+              g_k2.stats().foreign, start, ringTotal());
+
+  CHECK(out0 > 0u);
+  // Cube 1 is downstream of cube 0 and takes the pour.
+  CHECK(g_k1.stats().particlesIn > 0u);
+  // Cube 2 HEARD every one of those packets and took none of them. Without the address it would
+  // have injected the same particles cube 1 did, and the ring would have gained volume out of
+  // nothing -- a leak in the opposite direction from a dropped packet, and far harder to notice.
+  CHECK(g_k2.stats().foreign > 0u);
+  CHECK(g_k2.stats().packetsIn == 0u);
+  CHECK(g_k2.stats().particlesIn == 0u);
+  // Nothing was created. Particles still in flight or refused are accounted for either way.
+  CHECK(ringTotal() <= start);
+}
+
+TEST(chain_an_unaddressed_ring_duplicates_what_it_hears) {
+  // The behaviour the address exists to prevent, asserted rather than described. With no chain
+  // position every cube takes every packet, so a single pour is injected TWICE and the ring ends
+  // up holding more water than it started with.
+  resetRing(false);
+  const int start = ringTotal();
+  for (int s = 0; s < settleSteps(600); ++s) ringStep(s);
+
+  const uint32_t in1 = g_k1.stats().particlesIn, in2 = g_k2.stats().particlesIn;
+  std::printf("       unaddressed ring: 0 poured %u; 1 took %u, 2 took %u; total %d -> %d\n",
+              g_k0.stats().particlesOut, in1, in2, start, ringTotal());
+  CHECK(in1 > 0u);
+  CHECK(in2 > 0u);
+  CHECK(in1 + in2 > g_k0.stats().particlesOut);  // the same particles, twice over
 }
