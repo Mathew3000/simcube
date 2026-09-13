@@ -12,7 +12,8 @@ Status markers: **[STANDS]** current and load-bearing · **[REVERSED]** overturn
 built.
 
 Companions: [`SIMULATION.md`](SIMULATION.md) for how it works, [`RESOURCES.md`](RESOURCES.md) for
-the budget and the measurements, [`CUBE-PCB.md`](CUBE-PCB.md) for the board.
+the budget and the measurements, [`CUBE-PCB.md`](CUBE-PCB.md) for the board,
+[`MCU-REQUIREMENTS.md`](MCU-REQUIREMENTS.md) for what a part has to be to run the solver.
 
 ---
 

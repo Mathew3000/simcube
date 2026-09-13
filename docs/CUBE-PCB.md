@@ -36,6 +36,11 @@ frame) and PSRAM contention, not memory. Board count is therefore an open decisi
 recommends a display board that can drive one to three panels per output so the layout does not
 foreclose it.
 
+**Choosing the master's MCU is a document of its own:**
+[`MCU-REQUIREMENTS.md`](MCU-REQUIREMENTS.md) — the throughput requirement per tier, five
+requirements a candidate must meet, what to ignore on a datasheet, and a checklist in the order
+that fails fastest. It is the piece to read with a parts catalogue open.
+
 Why distributed rather than one central PCB: HUB75 is 14 signals switching at 16 MHz and is
 visually unforgiving, while the inter-board SPI is 4 signals and tolerant of a longer run. Keeping
 the fragile bus short is worth more than keeping the robust one on-board. Display boards therefore
@@ -420,59 +425,24 @@ blit and the splat bound together bought about 12x, and nothing of that size is 
 Working set is solver-only — particles, neighbour cache, sort grid, heat field. It excludes the
 accumulation buffers and the DMA framebuffer, which live on the display boards.
 
-#### REQ-MCU: what a master candidate must have
+#### The requirements themselves: [`MCU-REQUIREMENTS.md`](MCU-REQUIREMENTS.md)
 
-- **REQ-MCU-1 Single-precision hardware FPU, with hardware divide and square root.** Non-negotiable
-  and the easiest thing to get wrong, because a datasheet saying "FPU" does not imply either. The
-  ESP32-S3's FPU has neither: GCC emits calls to `__divsf3` and `sqrtf`, and the inner loop makes
-  ~260 of them per particle per step. Check by compiling `core/src/Solver.cpp` for the candidate
-  and running `nm -u` on the object — **a clean candidate shows no libm symbols.** Cortex-M7 shows
-  none; Xtensa LX7 shows both.
-- **REQ-MCU-2 The working set must fit zero-wait-state memory** — TCM, or SRAM with no flash-XIP
-  stall in the path. The solver is a scattered gather: 88 candidate reads per particle per step,
-  of which 27% are useful. Served through a small cache with a slow backing store, none of the
-  throughput figures above survive. Sizes per tier are in the table.
-- **REQ-MCU-3 Single-core throughput is what counts, today.** The solver is Gauss-Seidel — each
-  correction is applied in place and later particles see it — so extra cores currently buy
-  **nothing**. This is the one requirement that a software change could lift: the eight-colour cell
-  partitioning in DECISIONS.md P2 makes cores usable and is worth ~1.8x on any part. Until it
-  exists, judge a candidate on `clock x IPC`, not on core count.
-- **REQ-MCU-4 Deterministic scalar float.** All three targets compare a bit-identical state hash,
-  so the part must support `-ffp-contract=off` semantics — no unconditional fused multiply-add, and
-  no flush-to-zero that cannot be turned off.
-- **REQ-MCU-5** The master needs a radio for beaker-mode chaining (REQ-M-1). A part without one
-  implies a companion — for ESP32-P4 that is Espressif's own C6/C5 over SDIO. Budget the second
-  package and its pins, not just the first.
+Five requirements, what does *not* help and should not be paid for, what an aspirational part would
+have to be, and a checklist for evaluating a candidate in the order that fails fastest. Kept in its
+own document because it is the piece somebody reads while looking at a parts catalogue, away from
+power budgets and connector pinouts — and because two copies of a requirement drift.
 
-#### What does NOT help, and should not be paid for
+In one line each:
 
-Worth stating explicitly, because the specs that sell a modern MCU are mostly irrelevant here:
+| | |
+|---|---|
+| **REQ-MCU-1** | hardware FPU **with divide and square root** — check with `nm -u`, not with a datasheet |
+| **REQ-MCU-2** | the working set above must fit zero-wait-state memory |
+| **REQ-MCU-3** | single-core throughput is what counts until the solver is re-coloured |
+| **REQ-MCU-4** | deterministic scalar float: no unconditional FMA, defeatable flush-to-zero |
+| **REQ-MCU-5** | a radio for chaining, or a companion part and its pins budgeted |
 
-- **NPU / TPU / "AI accelerator".** Integer or bf16 matrix-multiply hardware. This workload is
-  scalar single-precision with an irregular neighbour gather and a sequential dependency between
-  particles. None of it maps. An NPU contributes exactly zero.
-- **SIMD / vector extensions** (Helium, RVV, the S3's PIE). The gather is irregular and
-  Gauss-Seidel serialises the writes, so there is nothing to vectorise without first doing
-  REQ-MCU-3's re-colouring — and even then the gain is in parallel *particles*, not lanes.
-- **GPU or 2D blitter.** The display boards do the drawing, and their cost is a fixed ~30 ms floor
-  that no processor removes (RESOURCES.md).
-- **Large flash, PSRAM bandwidth, high core count, Ethernet, USB 3.** None are on the critical
-  path for this board.
-
-#### Sizing an aspirational part
-
-For the top of the ladder — `d` = 0.5 at 60 fps — the requirement is **~2 700x an ESP32-S3 in
-sustained scalar single-precision throughput, with 38 MB of low-latency working memory.**
-
-A useful sanity check on what that means: eight cores at 2 GHz is ~66x the S3 in clock-cores, and
-perhaps 100x once better IPC is allowed for. **That is still 27x short** — and it only counts at
-all if REQ-MCU-3 has been lifted first, since without the re-colouring the other seven cores do
-nothing.
-
-So the honest statement is that the `max` rung is **not a microcontroller target at all**. It wants
-a many-core application processor or a GPU, and it is in the ladder to keep the parameter space
-open rather than because a part is expected. The rungs a real part can reach are `lite` through
-`beaker`: **2x to 11x an ESP32-S3**, which is squarely in Cortex-M7 territory.
+Candidates are in §13.1 below, and reproduced there alongside the requirements.
 
 ## 7. CUBE-DISPLAY (×3, identical)
 
@@ -650,6 +620,8 @@ Not a BOM — starting points, all to be confirmed for availability and second s
 
 ### 13.1 Master candidates, if the S3 is not enough
 
+Requirements a candidate must meet, and how to check them: [`MCU-REQUIREMENTS.md`](MCU-REQUIREMENTS.md).
+
 Ranked by measured instruction count and the CPI the S3 was measured at — derivation and its
 assumptions in RESOURCES.md §5.1. **Only the relative figures are measured; the CPI of every
 non-Espressif part below is an assumption**, and it is the term that decides the ranking.
@@ -662,7 +634,7 @@ non-Espressif part below is an assumption**, and it is the term that decides the
 | STM32H7S3 | Cortex-M7 | 600 | ~3.6x | `cube` | |
 | i.MX RT1062 | Cortex-M7 | 600 | ~3.8x | `cube` | |
 | i.MX RT1176 | Cortex-M7 | 1000 | ~6.3x | `beaker` | BGA, external flash, 6+ layers |
-| *(aspirational)* | — | — | ~2 700x | `max` | not a microcontroller — §6.2 |
+| *(aspirational)* | — | — | ~2 700x | `max` | not a microcontroller — `MCU-REQUIREMENTS.md` §6 |
 
 Two practical notes that the throughput column does not carry:
 

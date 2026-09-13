@@ -1,6 +1,6 @@
 # Resource allocation — master vs display
 
-Companion to [CUBE-PCB.md](CUBE-PCB.md). Where every byte, cycle, pin and megabyte-per-second
+Companion to [CUBE-PCB.md](CUBE-PCB.md) and [MCU-REQUIREMENTS.md](MCU-REQUIREMENTS.md). Where every byte, cycle, pin and megabyte-per-second
 lives, per ESP32-S3 role. **[M]** = measured, **[A]** = assumed and needs bench confirmation.
 
 **Revision:** 0.1. Supersedes the "one S3 cannot drive six 64×64 panels" claim in CUBE-PCB §1 —
