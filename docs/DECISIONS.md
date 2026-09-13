@@ -598,6 +598,49 @@ Splat 17.57 -> 16.20 ms, by walking outward from the texel nearest the particle 
 first miss rather than computing a chord — the S3 has no hardware square root (F1) and `core/`
 links no libm. Exact rather than approximate, so neither hash moves.
 
+### P5. A beaker that looks full does not fit on one S3 **[MEASURED, OPEN]**
+
+The tier was chosen for colour resolution: `32/d` distinguishable regions across the cube, so
+`d = 2.5` gives ~13 and mixing reads as mixing. What nobody had measured is how much **liquid** the
+device can then hold.
+
+A settled, completely full 32-unit vessel at `d = 2.5` is **1905 particles** (measured on the host
+at the beaker tier, not derived from `(32/d)^3`, which overestimates by 10%).
+
+The device's particle sweep, run on a `beaker-chain` board with no panels attached — so this is
+the solver alone, on two cores, at 64x64:
+
+| particles | sim/step | frame (2 substeps) | fps |
+|---|---|---|---|
+| 128 | 6.32 ms | 12.67 ms | **78.9** |
+| 256 | 22.86 | 45.78 | 21.8 |
+| 384 | 45.88 | 91.84 | 10.9 |
+| 512 | 71.56 | 143.23 | **7.0** |
+
+So one ESP32-S3 gives a beaker that is at most **27% full** (512 of 1905) at 7 fps, or **7% full**
+— a 2-unit film in a 32-unit box — at a comfortable frame rate. The pool cap of 512 is not the
+binding constraint; the solver is.
+
+*Derived from the sweep* (`n^1.77`, §5.1): 30 fps buys ~219 particles, so a vessel that is actually
+full at 30 fps needs `d ≈ 5.0` — about six particles across the box, and ~6 colour regions rather
+than 13. **The spacing that makes mixing legible and the spacing that fills the vessel are a factor
+of two apart**, and no tuning closes that: filling a volume costs `1/d³` particles while colour
+resolution pays `1/d`.
+
+Three ways out, none free:
+
+1. **Accept a quarter-full beaker at 7 fps.** A pour is slow; 7 fps may well read fine, and 512
+   particles is a genuine body of liquid rather than a film. **This is the cheapest thing to try
+   and it has not been looked at yet** — it is a judgement about a render, which is M4-E's to make.
+2. **Coarsen to `d ≈ 4`** — a full vessel at ~450 particles and ~8.7 fps, with 8 colour regions.
+3. **More silicon.** This is the concrete form of P4: beaker mode wants **8-10x** the solver
+   throughput of an S3, not 2x. At P4's measured ratios that is beyond every part on the list —
+   i.MX RT1176 at 6.3x is the closest and still short.
+
+Worth being precise about what this does *not* say: nothing here is about the radio, the chain, or
+the render, all of which are comfortable. It is the solver, and it is the same `n^1.77` wall §5.1
+found — beaker mode simply asks for a filled volume where the other tiers ask for a waterline.
+
 ### P4. MCU selection **[OPEN]**
 
 Solver throughput relative to the S3, from the measured ISA ratio (0.81) and CPI (1.40): RP2350
@@ -612,6 +655,11 @@ Not a Linux part: i.MX RT is a crossover MCU, bare metal or FreeRTOS.
 
 Recommended order before committing to silicon: land P2 and P1 first, because they change the
 requirement by more than a tier of chip changes the supply.
+
+**P5 sharpens the requirement**: a beaker that looks full wants 8-10x an S3's solver, not the 2x
+that would comfortably serve the existing tiers. If beaker mode is the reason to change silicon,
+no part currently on this list reaches it, and the answer is more likely to be a coarser beaker
+than a faster chip.
 
 ---
 

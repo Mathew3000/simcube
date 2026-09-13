@@ -196,3 +196,11 @@ same argument that put `SimFrame` in core for the multi-node preview.
 - **How coarse can the particles stay?** F3 says colour resolution is `32/d` with the split kernel.
   At `cube`'s d=3.0 that is ~10 regions. Whether ten reads as mixing is a judgement, and it decides
   whether beaker mode runs at 8.5 fps or at 26.
+
+- **Is a quarter-full beaker at 7 fps acceptable?** Measured since this plan was written
+  (`DECISIONS.md` P5): a full 32-unit vessel at `d = 2.5` is **1905 particles**, and the device
+  runs 512 of them at **7.0 fps** and 128 at 78.9. So the hardware beaker is a quarter full at
+  best, or a 2-unit film at a comfortable frame rate. The spacing that makes mixing legible and the
+  spacing that fills the vessel are a factor of two apart. **Look at a quarter-full beaker before
+  concluding anything** — it may read perfectly well, and it is the only one of the three ways out
+  that costs nothing.
