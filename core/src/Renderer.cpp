@@ -494,11 +494,33 @@ void Renderer::splatInk(InkView f, const Geometry& g) {
           if (trans <= 3) break;  // effectively opaque; nothing behind it can show through
         }
 
+        // Normalise the colour to full scale, keeping only its HUE.
+        //
+        // resolve() uses the chroma channels purely as a ratio and takes brightness from the
+        // weight channel, so carrying brightness here as well is not merely redundant -- it is
+        // harmful. Premultiplied by `contrib`, a faint column's colour is small, and three >>8
+        // shifts plus the bilinear upscale round it to zero while the opacity (scaled by ~900)
+        // survives. A texel with weight and no chroma takes resolve()'s untinted branch and comes
+        // out NEUTRAL WHITE, which is right for a particle outside its narrow chroma disc and
+        // meaningless for ink, where both numbers describe the same dye.
+        //
+        // Measured before this: 7% of lit texels, none of them while the dye was fresh and all of
+        // them once it began to disperse -- so the plume grew a shimmering white fringe that
+        // flickered as texels crossed the truncation threshold in and out.
+        int cmax = cr > cg ? cr : cg;
+        if (cb > cmax) cmax = cb;
+        if (cmax > 0) {
+          const int rcp = inkRecip_[imin(cmax, kInkSumMax)];  // 65536/cmax
+          cr = imin(255, (cr * rcp) >> 8);
+          cg = imin(255, (cg * rcp) >> 8);
+          cb = imin(255, (cb * rcp) >> 8);
+        }
+
         uint8_t* o = &inkFace_[(iv * kInkDim + iu) * 4];
         o[0] = (uint8_t)iclamp(255 - trans, 0, 255);
-        o[1] = (uint8_t)imin(255, cr);
-        o[2] = (uint8_t)imin(255, cg);
-        o[3] = (uint8_t)imin(255, cb);
+        o[1] = (uint8_t)cr;
+        o[2] = (uint8_t)cg;
+        o[3] = (uint8_t)cb;
       }
     }
 
@@ -533,6 +555,14 @@ void Renderer::splatInk(InkView f, const Geometry& g) {
           v[k] = a + (((b - a) * ty) >> 8);
         }
         if (v[0] == 0) continue;
+#if PARTSIM_ENABLE_CHROMA
+        // A texel whose hue interpolated away entirely holds no dye worth drawing, and writing
+        // weight without chroma is precisely what makes resolve() paint it neutral. This is the
+        // last 0.2% the hue normalisation above cannot reach: opacity rounds to 1 while all three
+        // channels round to 0, which needs an interpolation weight below 1/255. Dropping it costs
+        // a texel at level 1 -- indistinguishable from black -- and removes the white speckle.
+        if (v[1] + v[2] + v[3] == 0) continue;
+#endif
 
         uint16_t* row = dst + (std::size_t)(j * w + i) * kChannelCount;
         row[kChWater] = satAdd(row[kChWater], (v[0] * wScale) >> 8);

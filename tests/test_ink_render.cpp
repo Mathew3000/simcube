@@ -183,6 +183,54 @@ TEST(ink_projection_puts_an_offset_blob_on_the_same_side_of_both_neighbours) {
   CHECK_NEAR(centroidU(kPlusX), (double)(w - 1) * 0.5, 2.0);
 }
 
+#if PARTSIM_ENABLE_CHROMA
+TEST(ink_never_writes_weight_without_chroma) {
+  const SimVolume v = setup();
+  (void)v;
+  const Geometry g = Geometry::cube(32, 1.0f);
+  CHECK(g_r.init(g));
+  Rng rng(0xC0FFEE);
+  g_f.seedFlow(rng);
+  g_f.inject(Vec3{0.0f, 6.0f, 0.0f}, 6.0f, 0, 255);
+#if PARTSIM_INK_CHANNELS > 1
+  g_f.inject(Vec3{0.0f, -4.0f, 0.0f}, 6.0f, 1, 255);
+#endif
+  g_f.spawnVortonPair(Vec3{0.0f, 6.0f, 0.0f}, Vec3{1.0f, 0.0f, 0.0f}, 6.0f, 700, 400);
+
+  // resolve() renders a texel with weight but no chroma as NEUTRAL. For a particle that is
+  // correct -- it is lit by the wide weight kernel and outside every narrow chroma disc, so no
+  // particle is close enough to say what colour it is. For ink the two numbers describe the SAME
+  // dye, so the combination can only arise from truncation, and it paints a white texel in the
+  // middle of coloured fluid.
+  //
+  // This regressed once already and it is the kind that is loud: as a plume disperses, texels
+  // cross the threshold in and out and the fringe flickers. Measured at 7% of lit texels, all of
+  // them appearing only after the dye began to settle -- which is why none of the other tests,
+  // all of which look at freshly injected dye, noticed.
+  for (int frame = 0; frame < 20; ++frame) {
+    g_r.clear();
+    g_r.splatInk(g_f, g);
+    for (int p = 0; p < 6; ++p) {
+      const int w = g_r.panelWidth(p);
+      const int h = w > 0 ? g_r.panelTexels(p) / w : 0;
+      for (int j = 0; j < h; ++j)
+        for (int i = 0; i < w; ++i) {
+          if (g_r.accumAt(p, i, j, kChWater) == 0) continue;
+          const int cSum = (int)g_r.accumAt(p, i, j, kChCR) + (int)g_r.accumAt(p, i, j, kChCG) +
+                           (int)g_r.accumAt(p, i, j, kChCB);
+          if (cSum == 0) {
+            std::printf("    frame %d panel %d texel (%d,%d): weight %d, chroma 0\n", frame, p, i,
+                        j, (int)g_r.accumAt(p, i, j, kChWater));
+            CHECK(cSum > 0);
+            return;
+          }
+        }
+    }
+    for (int k = 0; k < 10; ++k) g_f.step(Vec3{0.0f, -9.81f, 0.0f}, Vec3{0, 0, 0}, 50);
+  }
+}
+#endif
+
 TEST(ink_projection_is_deterministic) {
   const SimVolume v = setup();
   (void)v;
