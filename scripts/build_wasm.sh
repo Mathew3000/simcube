@@ -15,7 +15,7 @@
 # `scripts/build_wasm.sh -DPARTSIM_ENABLE_CHROMA=1` sets an option nothing reads and silently
 # produces a chroma-free artifact that looks exactly like a mix that will not converge. Only
 # PARTSIM_MAX_* are forwarded as cache variables (core/CMakeLists.txt), so the tier has to arrive
-# as a compiler flag. See M4-E-FINDINGS.md.
+# as a compiler flag. See DECISIONS.md D67.
 #
 # emsdk requires Python >= 3.10 and macOS ships 3.9 with Xcode, so EMSDK_PYTHON has to point
 # at a newer interpreter or the whole toolchain fails with a confusing error.

@@ -138,10 +138,22 @@ Two defects the measurement found, both of which every counter in the system had
 the pump ran once per frame where the queue is cleared twice (half the pour crossed as clones, see
 `DECISIONS.md` D62), and a beaker filled to 100% of its pool has nowhere to put an arrival (D63).
 
-### E. Browser, UI, reset — **agent, ready now** (`M4-E-HANDOFF.md`)
+### E. Browser, UI, reset — **DONE** (`692e81b`)
 
 N beakers on one page, spill lists wired into a ring through the same core code the firmware runs.
 Per-beaker reset, colour pickers, fill readout. This is where chaining gets debugged.
+
+**DONE.** `beakers.html` and `ps_beaker_*`, up to six beakers, JS holding the packets so a dropped
+one is genuinely dropped. Three beakers over 600 frames: a perfect ring conserves exactly
+(3810 → 3810), 30% packet loss costs 0.3% with 1394 particles made up, and a broken ring loses
+47.4%. Its own artifact at the beaker tier, because `PARTSIM_ENABLE_CHROMA` is set by the tier and
+turning it on in the default one would move the pixel golden for every page.
+
+It also did what a debugging surface is for: five things this plan or the brief asserted turned out
+to be wrong (`DECISIONS.md` D67-D73), including that `nodes.html` has never been able to run at all,
+and two defects in the spill wire format that the two-board bring-up could not have found — a
+checksum blind to `0x00` → `0xFF` over a payload it did not cover, and a shortfall with no
+plausibility bound that one flipped byte turned into ten days of manufactured clones (D74, D75).
 
 ### F. `SpiFrameLink` bring-up — **agent, ready when two boards are wired**
 

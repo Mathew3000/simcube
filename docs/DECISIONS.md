@@ -1249,9 +1249,19 @@ A ring conserves volume only if each beaker can hold its own fill **plus whateve
 toward it**, and in a chain every beaker starts full at once. So the beaker tier refills to
 `(kMaxParticles * 3) / 5` rather than loading the preset's count.
 
-This is also why `injectSpill` returning false has to be counted rather than ignored: it is the
-only evidence that a chain is losing volume to a full vessel rather than to the air, and the two
-have opposite fixes.
+This is also why `injectSpill` returning false has to be counted rather than ignored: on the device
+it is the evidence that a chain is losing volume to a full vessel rather than to the air, and the
+two have opposite fixes.
+
+**Only on the device, though**, and M4-E found the difference. `injectSpill` fails when the particle
+**pool** is full; `capacity()` is a rest-density figure for the box and not a hard cap at all. The
+device's pool (512) is smaller than its vessel (~2100), so the two coincide there. At host and WASM
+capacities the pool is 16384 and a beaker stuffed to 167% of capacity refused **nothing** — what
+fired instead was `SpillQueue::dropped`, because more than `kMaxSpill` crossed in one step. A page
+or a test that waits for a rejection to tell it a beaker is overfull will wait forever.
+
+And the 60% itself has to be taken against **whichever ceiling binds**, which the firmware was not
+doing — see D68.
 
 ### D64. A cube's dye is a property of the cube, not of what is in it **[STANDS]**
 
@@ -1475,3 +1485,70 @@ rather than a column — but that is sharpness, not legibility.
 So the spacing lever survives the colour requirement: **26 fps, not 8.5**. One caveat, stated
 because it bounds the claim: this is a single fixture with two maximally separated hues. Two dyes
 closer together would be a harder test and was not run.
+
+### D74. The spill checksum covers the whole packet, and is a CRC **[MEASURED]**
+
+M4-E's two wire-format findings (D70), acted on. Both were in code this author wrote, and both were
+reported rather than patched because the brief said `core/` was not theirs — which is how a finding
+this precise survived to be fixed rather than argued about.
+
+Reproduced first, on a one-particle packet:
+
+| corruption | version 1 |
+|---|---|
+| single-bit flips in the **header** | 0 of 128 accepted |
+| single-bit flips in the **payload** | **104 of 104 accepted** |
+| single-byte substitutions in the header | **7 of 4080 accepted** — every one a `0x00` → `0xFF` |
+
+The payload number is the worse half and it is the one the original commit message called harmless:
+*"the fifty-two body flips decode into slightly wrong positions, which is harmless."* Dye rides in
+the payload. A flipped dye byte breaks the `cr + cg <= kChromaOne` invariant, the renderer's implied
+blue goes negative, and the ring gains colour nobody poured — with the packet counted good.
+
+The header number is Fletcher-16's known blind spot: it sums modulo 255, where `0x00` and `0xFF`
+are congruent. The bytes that are zero in ordinary traffic are the high halves of `seq` and
+`totalOut` and `from` on cube 0 — the addressing and the entire shortfall mechanism.
+
+So: **CRC-16/CCITT-FALSE over the entire packet**, header and payload, with the checksum field
+zeroed for the computation. Bitwise, 8 shifts a byte over at most 250 bytes, a few packets a frame —
+a table would cost more flash than the cycles are worth. Version bumped to **2**, and version 1
+packets are rejected outright: for a mixed chain that is the right outcome, since the alternative is
+one cube reading another's dye through a checksum with a known hole. Now 0 of 68 bit flips and 0 of
+4080 byte substitutions are accepted.
+
+Dye is also **clamped on decode** as defence in depth. The checksum makes a bad packet unlikely
+rather than impossible, and the invariant is cheap to enforce where it is read.
+
+### D75. A shortfall that cannot be believed is not made up **[MEASURED]**
+
+The other half of D70. `SpillReceiver::note` computed `expected - seen_` and returned it unbounded,
+so one flipped byte in `totalOut` asked for tens of thousands of particles — and the chain would
+have created them, 18 a frame, for hours. M4-E measured the full runaway in the browser: the fill
+stays plausible the whole time, because an overfilled beaker pours out of its own top at roughly the
+rate it manufactures clones.
+
+A sender releases at most `kMaxSpill` particles in a step, so a plausible outage is tens to a few
+hundred. Above `kMaxShortfallPerPacket` the receiver re-baselines and counts a **resync** instead.
+Making up a plausible loss is worth doing; manufacturing an implausible one is worse than losing it.
+
+The same walk found a second, quieter bug: a sender that **restarts** counts backwards, because
+`init()` resets the cumulative counters (D60). The old code returned 0 and kept its own count ahead
+of the sender's — permanently, so the shortfall mechanism was silently disabled for the rest of the
+run. It now re-baselines and counts that as a resync too.
+
+### D76. `nodes.html` has never run, and the fix is six lines **[MEASURED]**
+
+Found by M4-E while building the beaker page, reported as not theirs, and true: `nodes.html` imports
+`cubeview.js`, which does `import * as THREE from 'three'`, and the page has no `<script
+type="importmap">`. The bare specifier does not resolve, so the **entire module script never
+executes** — the page renders its static table and nothing else, and the failure goes to a console
+nobody has open.
+
+`index.html` has had the map since it was written. So the multi-node browser preview — M3 block D,
+the thing built so the protocol could be debugged without hardware — has never once run in a
+browser. Everything it was supposed to demonstrate was in fact demonstrated later, on emulated
+Xtensa and then on two boards.
+
+Worth keeping as a reminder of the shape of the bug: every artifact of it looked fine. The HTML is
+valid, the JS is valid, `ctest` covers the module and not the page, and a page that silently does
+nothing looks identical to a page waiting for input.

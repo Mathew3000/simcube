@@ -81,12 +81,99 @@ TEST(spill_rejects_a_damaged_packet_before_touching_state) {
     if (decodeSpill(copy, n, kBox, out, 4, got) >= 0) ++accepted;
   }
   std::printf("       %d of %d single-bit corruptions accepted\n", accepted, n);
-  // The checksum covers the header; the body is covered only by length and by the header's own
-  // integrity, so a body flip CAN decode -- into a slightly wrong position, which is harmless.
-  // What must never pass is a corrupted HEADER, and that is what this bounds.
-  CHECK(accepted <= n - kSpillHeaderBytes);
+  // NONE. Version 1 covered the header only and accepted every one of the body's corruptions on
+  // the reasoning that a wrong position is harmless -- which was wrong twice over: dye rides in
+  // the body too, and a Fletcher-16 is blind to 0x00 <-> 0xFF, so seven of the header's own bytes
+  // were substitutable as well. The CRC-16 covers the whole packet.
+  CHECK(accepted == 0);
 
   CHECK(decodeSpill(buf, kSpillHeaderBytes - 1, kBox, out, 4, got) == -1);  // truncated
+}
+
+TEST(spill_rejects_every_single_byte_substitution_in_the_header) {
+  // The corruption a Fletcher-16 cannot see. It sums modulo 255, where 0x00 and 0xFF are
+  // congruent, so a zero byte could be substituted with 0xFF and the checksum did not move --
+  // and the bytes that are zero in real traffic are the high halves of seq and totalOut and
+  // `from` on cube 0, which is to say the addressing and the entire shortfall mechanism.
+  SpillParticle in[2];
+  for (int i = 0; i < 2; ++i) in[i] = made(i);
+  uint8_t buf[kSpillMaxPayload];
+  SpillHeader h;
+  h.seq = 7;
+  h.totalOut = 7;  // deliberately small, so the high bytes are zero as they are in real traffic
+  const int n = encodeSpill(h, in, 2, kBox, buf, sizeof buf);
+  CHECK(n > 0);
+
+  SpillParticle out[2];
+  SpillHeader got;
+  int accepted = 0, tried = 0;
+  for (int b = 0; b < kSpillHeaderBytes; ++b)
+    for (int v = 0; v < 256; ++v) {
+      if ((uint8_t)v == buf[b]) continue;
+      uint8_t copy[kSpillMaxPayload];
+      for (int k = 0; k < n; ++k) copy[k] = buf[k];
+      copy[b] = (uint8_t)v;
+      ++tried;
+      if (decodeSpill(copy, n, kBox, out, 2, got) >= 0) ++accepted;
+    }
+  std::printf("       %d of %d single-byte header substitutions accepted\n", accepted, tried);
+  CHECK(accepted == 0);
+}
+
+#if PARTSIM_ENABLE_CHROMA
+TEST(spill_clamps_dye_that_would_create_colour_from_nothing) {
+  // Defence in depth behind the checksum: the renderer resolves colour as a ratio whose
+  // denominator is cr + cg + cb, with blue implied. A pair that breaks cr + cg <= kChromaOne makes
+  // the implied blue negative, and the arrival brings dye into the ring that nobody poured.
+  SpillParticle p{};
+  p.pos = Vec3{0.0f, 0.0f, 0.0f};
+  p.vel = Vec3{0.0f, 0.0f, 0.0f};
+  p.cr = kChromaOne;
+  p.cg = kChromaOne;  // twice the dye a particle can hold, encoded with a VALID checksum
+  uint8_t buf[kSpillMaxPayload];
+  SpillHeader h;
+  const int n = encodeSpill(h, &p, 1, kBox, buf, sizeof buf);
+  CHECK(n > 0);
+
+  SpillParticle out[1];
+  SpillHeader got;
+  CHECK(decodeSpill(buf, n, kBox, out, 1, got) == 1);
+  CHECK((uint32_t)out[0].cr + (uint32_t)out[0].cg <= (uint32_t)kChromaOne);
+  CHECK(out[0].cr == kChromaOne);  // the first channel survives; the second gives way
+  CHECK(out[0].cg == 0);
+}
+#endif
+
+TEST(spill_receiver_will_not_manufacture_an_implausible_shortfall) {
+  // One flipped byte in totalOut asked for 65 535 particles, and the chain would have created
+  // them eighteen a frame for hours -- with the beaker looking plausible throughout, because it
+  // pours out of its own top at roughly the rate it manufactures clones.
+  SpillReceiver rx;
+  SpillHeader h;
+  h.totalOut = 10;
+  CHECK(rx.note(h, 1) == 0);
+
+  h.totalOut = 10u + (1u << 16);  // byte 2 of the counter, flipped once
+  const uint32_t missed = rx.note(h, 1);
+  std::printf("       implausible jump reported as %u (asked for %u)\n", missed, 1u << 16);
+  CHECK(missed == kMaxShortfallPerPacket);
+  CHECK(rx.resyncs() == 1u);
+
+  // And a sender that RESTARTS counts backwards -- init() resets the cumulative counters. Left
+  // alone, the receiver's own count stays ahead of the sender's for good and the shortfall
+  // mechanism is silently disabled for the rest of the run.
+  SpillReceiver r2;
+  SpillHeader a;
+  a.totalOut = 500;
+  r2.note(a, 5);
+  a.totalOut = 520;
+  r2.note(a, 20);
+  a.totalOut = 4;  // the far cube rebooted
+  CHECK(r2.note(a, 4) == 0);
+  CHECK(r2.resyncs() == 1u);
+  // Back in step: the next genuine loss is reported normally rather than swallowed.
+  a.totalOut = 12;
+  CHECK(r2.note(a, 4) == 4u);
 }
 
 TEST(spill_receiver_counts_what_the_radio_lost) {

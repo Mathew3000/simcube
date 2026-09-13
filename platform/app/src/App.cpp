@@ -90,11 +90,20 @@ bool App::begin(Role role) {
   // here rather than by a console command nobody would send. Every other tier leaves it closed
   // and every line of the chain below is then inert, which is what keeps beaker mode a mode.
   sim_.setOpenFace(kOpenPosY);
-  // Refilled to a FRACTION of capacity, which is not tuning but a requirement of chaining: the
-  // scene preset fills to 100% of the pool, and the first hardware run then had every one of 229
-  // arrivals rejected for want of room while the sending beaker emptied. A ring conserves volume
-  // only if each beaker can hold its own fill plus whatever is in flight toward it.
-  if (!sim_.init(mode, (kMaxParticles * 3) / 5, 0xBEA6u, kPanelRes)) {
+  // Refilled to a FRACTION of the room available, which is not tuning but a requirement of
+  // chaining: the scene preset fills to the brim, and the first hardware run then had every one of
+  // 229 arrivals rejected for want of room while the sending beaker emptied. A ring conserves
+  // volume only if each beaker can hold its own fill plus whatever is in flight toward it.
+  //
+  // Sixty percent of WHICHEVER BINDS, and that distinction is the whole correctness of this line.
+  // Two different ceilings exist: the particle pool (kMaxParticles, a memory figure) and the
+  // vessel (capacity(), how many particles at rest density the box holds). On the device the pool
+  // binds at 512 against a vessel of ~2100, so 60% of the pool is a beaker a quarter full and the
+  // intent is met. At host capacities the pool is 16384 against the same vessel, 60% of it asks
+  // for 9830, init clamps that to nine tenths of the VESSEL -- and the beaker comes up 90% full,
+  // which is the exact condition this line exists to prevent. Found by M4-E in the browser.
+  const int room = kMaxParticles < sim_.capacity() ? kMaxParticles : sim_.capacity();
+  if (!sim_.init(mode, (room * 3) / 5, 0xBEA6u, kPanelRes)) {
     c.println("FATAL: beaker refill failed");
     return false;
   }

@@ -46,6 +46,16 @@
 </div>
 <div id="err"></div>
 
+<!-- cubeview.js (via OrbitControls) does `import ... from 'three'`, so the bare specifier needs
+     mapping. WITHOUT THIS the module script below never runs at all: the import fails to resolve
+     and the browser reports it to a console nobody has open, so the page renders its static table
+     and nothing else. index.html has always had this map; this page never did, which means the
+     multi-node preview has never actually run in a browser since it was written. Found by M4-E
+     while building beakers.html, and reported rather than patched because it was not theirs. -->
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+
 <script type="module">
 import createPartsim from './public/partsim.mjs';
 import { createCubeView } from './cubeview.js';

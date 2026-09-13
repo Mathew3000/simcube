@@ -77,12 +77,15 @@ struct SpillQueue {
 // container box, int8 velocity -- because the two formats face the same problem and a second
 // convention would be a second thing to get wrong.
 //
-// Header is 16 bytes: magic(2), version(1), flags(1), seq(4), totalOut(4), count(2), and a
-// Fletcher-16(2) over everything before it. Sixteen rather than twelve costs nothing -- both leave
+// Header is 16 bytes: magic(2), version(1), from(1), seq(4), totalOut(4), count(2), and a
+// CRC-16(2) over the ENTIRE packet -- header and payload, with the checksum field itself zeroed. Sixteen rather than twelve costs nothing -- both leave
 // room for the same 18 particles, because 13 does not divide the difference -- and twelve had no
 // room for totalOut, which is the field the entire shortfall mechanism is built on.
 constexpr uint16_t kSpillMagic = 0x5350;  // 'SP'
-constexpr uint8_t kSpillVersion = 1;
+// 2: the checksum covers the whole packet and is a CRC-16 rather than a Fletcher-16. Version 1
+// packets are rejected outright, which is the right outcome for a mixed chain -- the alternative
+// is one cube reading another's dye through a checksum with a known blind spot.
+constexpr uint8_t kSpillVersion = 2;
 constexpr int kSpillHeaderBytes = 16;
 constexpr int kSpillBytesPerParticle = 6 + 3 + 4;  // pos(3x uint16), vel(3x int8), cr+cg
 constexpr int kSpillMaxPayload = 250;              // ESP-NOW's limit, not ours
@@ -120,6 +123,19 @@ int decodeSpill(const uint8_t* in, int len, const Aabb& box, SpillParticle* out,
 // sender's cumulative totalOut is what tells the two apart: it advances by exactly the number of
 // particles it has ever spilled, so a receiver that has seen fewer knows the difference and can
 // make it up.
+// The largest shortfall one packet may report, and therefore the most volume a single arrival can
+// ask to have manufactured.
+//
+// A sender releases at most kMaxSpill particles in a step, so a plausible outage is tens to a few
+// hundred. A number far above that is not an outage: it is a corrupted counter or a sender that
+// restarted, and one flipped byte in totalOut asked for 65 535 particles -- which the chain would
+// then dutifully create, eighteen a frame, for hours, while the beaker stayed plausibly full
+// because it poured out of its own top at roughly the rate it manufactured clones.
+//
+// Making up a plausible loss is worth doing; manufacturing an implausible one is worse than losing
+// it. Above this the receiver re-baselines and counts a resync instead.
+constexpr uint32_t kMaxShortfallPerPacket = (uint32_t)kMaxSpill;
+
 class SpillReceiver {
  public:
   // Call with each decoded header. Returns how many particles were missed since the last packet --
@@ -135,13 +151,28 @@ class SpillReceiver {
     lastSeq_ = h.seq;
     const uint32_t expected = h.totalOut;         // what the sender has spilled in total
     seen_ += (uint32_t)decoded;                   // what this receiver has actually taken
-    if (expected <= seen_) return 0;
-    const uint32_t missing = expected - seen_;
+    if (expected < seen_) {
+      // The sender went BACKWARDS, which means it restarted -- init() resets the cumulative
+      // counters (D60). Re-baseline rather than returning 0 and keeping a count that is now ahead
+      // of the sender forever, which would silently disable the shortfall mechanism for good.
+      seen_ = expected;
+      ++resyncs_;
+      return 0;
+    }
+    if (expected == seen_) return 0;
+    uint32_t missing = expected - seen_;
     seen_ = expected;  // do not report the same shortfall twice
+    if (missing > kMaxShortfallPerPacket) {
+      // Implausible: a corrupt counter, not a lost packet. See kMaxShortfallPerPacket.
+      ++resyncs_;
+      missing = kMaxShortfallPerPacket;
+    }
     shortfall_ += missing;
     return missing;
   }
   uint32_t shortfall() const { return shortfall_; }
+  // Packets whose totalOut could not be believed: a restarted sender, or a corrupted counter.
+  uint32_t resyncs() const { return resyncs_; }
   uint32_t lastSeq() const { return lastSeq_; }
   bool started() const { return started_; }
 
@@ -150,6 +181,7 @@ class SpillReceiver {
   uint32_t seen_ = 0;
   uint32_t lastSeq_ = 0;
   uint32_t shortfall_ = 0;
+  uint32_t resyncs_ = 0;
 };
 
 }  // namespace partsim

@@ -509,7 +509,8 @@ function hud() {
     // totalOut -- and the pump will pay it off at kSpillMaxPerPacket a frame for as long as the
     // page is open. Flagged rather than merely displayed, because the number is the ONLY symptom:
     // `bad` stays zero and the fill stays plausible while the beaker fills itself with clones.
-    // See M4-E-FINDINGS.md; one flipped byte produced a debt of 16711680.
+    // See DECISIONS.md D70 and D75; one flipped byte produced a debt of 16711680, which the
+    // receiver now refuses to believe.
     const wild = d(S.shortfall) > cap * N;
     put(3, wild ? d(S.shortfall) + ' !' : d(S.shortfall),
         wild ? 'bad' : (d(S.shortfall) ? 'warn' : 'dim'));
