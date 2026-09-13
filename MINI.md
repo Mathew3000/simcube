@@ -8,9 +8,12 @@
 
 ## 0. Two things to settle before you write code
 
-1. **The LED addressing order.** The user knows it and it is not written down yet. **Ask them**, or
-   determine it with the test pattern (§6.3) — do not guess. Everything else in this document holds
-   whatever the answer is; this one fact decides one function.
+1. **The LED addressing order.** The user knows it and it is not written down yet. **Ask them**, and
+   confirm it with the walk (§6.3) — do not guess, and do not take a recollection as settled when
+   one command checks it. They believe the 8×8 panels are **progressive rather than serpentine**
+   (every row starting at the same edge), which is the less common wiring and therefore the one
+   worth confirming. Everything else in this document holds whatever the answer is; this one fact
+   decides one function.
 2. **Confirm the panel wiring is six 8×8 matrices in one chain**, not a volumetric lattice. This
    brief assumes six faces on a shell, 384 LEDs. If it turns out to be a 512-LED volumetric cube,
    **stop and say so** — that is a different renderer and a different document.
@@ -119,10 +122,15 @@ to a strip index; write the LED buffer. Then one `show()`.
 
 Three things that are yours and not `ChainMap`'s:
 
-- **Serpentine.** WS2812B matrices are almost always wired boustrophedon: row 0 left-to-right, row 1
-  right-to-left. `ChainMap` handles face → chain position, rotation and mirroring; it does not know
-  that the physical strip snakes. That is one `if (y & 1)` in your index function, and it must be a
-  **flag**, not an assumption — some matrices are progressive.
+- **Serpentine — and the user believes these panels are NOT.** WS2812B matrices are usually wired
+  boustrophedon (row 0 left-to-right, row 1 right-to-left), but the user recalls these being
+  **progressive**: every row starts at the same edge. `ChainMap` handles face → chain position,
+  rotation and mirroring; it knows nothing about how the physical strip snakes, so this is one
+  `if (y & 1)` in your index function either way.
+
+  Default to **progressive**, keep it a compile-time flag rather than an assumption, and **confirm
+  it with the walk (§6.3) before trusting a recollection** — it is one command and the failure mode
+  is every other row reversed, which at 8 pixels reads as noise rather than as a pattern.
 - **Face order along the chain.** Which physical matrix is first. `ChainMap::setMount` already
   exposes this over the console (`m <face> <rot> <mirror>`), so a wrong gluing is fixed at runtime
   rather than recompiled. Do not bypass it.
@@ -132,7 +140,109 @@ Three things that are yours and not `ChainMap`'s:
   `(cx, cy) → strip index` for the real wiring (§0 item 1) and write it in one place with the
   reasoning above it.
 
-### M3. Power — mandatory, not a preference
+### M3. Orientation mode — the eight corners
+
+**The user's idea, and it is a better calibration signal than the one this project currently
+uses.** A mode, held on the cube until dismissed, in which each face shows where it *thinks* it is
+and which way up it *thinks* it is — so a wrong panel can be fixed by looking at the object and
+typing, rather than by unsoldering.
+
+#### Why corners
+
+**Colour the eight corners of the cube.** Each corner is a combination of signs on the three axes,
+and each of the six faces owns four of them. That single picture is a **complete** calibration
+signal, which is worth spelling out because it is not obvious:
+
+- **Face identity** — the *set* of four corner colours a panel shows is unique to one face. A panel
+  in the wrong chain slot displays a set that belongs somewhere else.
+- **Rotation** — the four colours are the right set but in the wrong places.
+- **Mirror** — the same set, in the same cyclic order, but reversed. A mirrored face is the one
+  case the eye cannot catch from a rotationally symmetric pattern, and corner colours catch it.
+- **And a cross-check the user gets for free**: three faces meet at every corner, so walk around the
+  cube and each corner must show **one colour on all three of its faces**. A disagreement names both
+  the corner and the two faces that disagree about it.
+
+That last property is why this beats the existing arm pattern (`PanelDriver::testPattern`), which
+tells you whether *one* face is consistent with itself but nothing about whether the six agree.
+
+#### The colouring, and why not eight arbitrary hues
+
+Derive the colour from the corner's **sign vector**: `+x` adds red, `+y` adds green, `+z` adds blue.
+
+| corner | colour | | corner | colour |
+|---|---|---|---|---|
+| `(−,−,−)` | dim grey | | `(+,+,−)` | yellow |
+| `(+,−,−)` | red | | `(+,−,+)` | magenta |
+| `(−,+,−)` | green | | `(−,+,+)` | cyan |
+| `(−,−,+)` | blue | | `(+,+,+)` | white |
+
+Eight arbitrary hues would work and would be worse: this mapping is **reasoned about rather than
+memorised**. "More red is further along +x" tells the user which way a panel is turned, not merely
+that it is wrong. Note the floor — `(−,−,−)` must be a dim grey rather than black, or one corner of
+the cube is simply invisible and the most important one to check is the one you cannot see.
+
+#### Deriving it from the geometry, not from a table
+
+**Compute the corner for a texel from the panel's own basis**, not from a per-face lookup:
+
+```
+world = panel.origin + panel.u * (i + 0.5) + panel.v * (j + 0.5)
+corner = sign of each component of (world − box centre)
+```
+
+A table of "face 3's top-left corner is cyan" is six chances to make the same mistake the mode
+exists to detect, and it would have to be rewritten for 32×32 and for 64×64. Derived from
+`Geometry`, it is correct for any face count, any resolution and any pitch — and it is **testable on
+the host**, which a pattern that only exists inside a driver is not.
+
+So put the generator in `core/` (`calibrationTexel(const Geometry&, int panel, int i, int j) → rgb`
+or similar), have the driver call it per texel, and write the host test: **the three faces meeting
+at each corner must agree**, and a deliberately mis-rotated mount must make them disagree. Assert
+the second one too — a calibration pattern that cannot fail is not a calibration pattern.
+
+At 8×8, a 2×2 block per corner is legible; that is 16 of 64 pixels. Use the middle for the **face
+index**, as that many lit pixels in a row — so the user can say "face 4 is the one that is wrong"
+rather than "that one, over there".
+
+#### It has to be a MODE, not a frame
+
+`showTestPattern_` in `App` today is a one-shot: it draws once and the fluid resumes. That is wrong
+for this. The user needs to **walk around the cube, find a bad panel, type a correction, and watch
+it change** — so orientation mode stays on until it is switched off, and every `m` command takes
+effect live.
+
+#### The console command needs to be able to move a panel, which today it cannot
+
+`m <face> <rot> <mirror>` exists, and it deliberately **preserves the existing chain slot**
+(`App.cpp:661`). For the HUB75 cube that was right: the panels were already in known slots and only
+their gluing was in question. Here, *which physical matrix is which face* is exactly what the user
+is trying to correct.
+
+So extend it, backward-compatibly:
+
+```
+m                          print the mount table
+m <face> <rot> <mirror>    unchanged, today's behaviour
+m <face> <slot> <rot> <mirror>    also move the face to another chain slot
+```
+
+**Setting a slot that is already taken must SWAP the two faces**, not fail. `ChainMap::setMount`
+validates that the table stays a bijection, so assigning face 2 to slot 5 while face 5 is there gets
+rejected — which is correct of `ChainMap` and useless at the console, because "these two are the
+wrong way round" is the single most likely thing a user has found. Swap, then report both.
+
+This is a change in `platform/app/`, which is shared with the S3 firmware. It is a small, additive
+and strictly better command, so make it — and say in the commit message that the HUB75 cube inherits
+it.
+
+#### Persisting the result
+
+The mount table the user arrives at is the deliverable of this whole exercise and it must not be
+retyped after every reboot. NVS is out of scope for the port, so at minimum: **print the table in a
+form that can be pasted back** — a `defaultMounts`-shaped C array the user or the agent commits as
+the mini profile's default. Say so in `printMounts`.
+
+### M4. Power — mandatory, not a preference
 
 **384 WS2812B at full white is about 21 A.** The supply is 3 A. Getting this wrong browns out the
 ESP32 mid-frame, or worse.
@@ -160,7 +270,7 @@ a one-line change and an informed one.
 Start conservative — 2000 mA — and **measure the real draw** with a meter if one is available. The
 55 mA figure is a datasheet-class number, not a measurement of these LEDs.
 
-### M4. Motion: canned now, IMU when it arrives — both
+### M5. Motion: canned now, IMU when it arrives — both
 
 There is no IMU yet and there will be one, so build the seam and both ends of it.
 
@@ -180,7 +290,7 @@ There is no IMU yet and there will be one, so build the seam and both ends of it
 it out. `App::initMotion(cfg, axes)` takes it; get it from the user or from the `i` command once
 the part exists.
 
-### M5. The PlatformIO project
+### M6. The PlatformIO project
 
 **A new directory, `platform/esp32mini/`, with its own `platformio.ini`** — not another environment
 in `platform/esp32/platformio.ini`. That file's `[env]` section hardcodes `board =
@@ -194,9 +304,9 @@ this is its second real platform.
 
 Expect ~200 lines. If it is much more, something that belongs in `platform/app/` has been copied.
 
-### M6. Beaker mode and the chain
+### M7. Beaker mode and the chain
 
-Both should work unchanged once M1–M5 are in, and both are worth proving:
+Both should work unchanged once M1–M6 are in, and both are worth proving:
 
 - **Beaker**: the tier opens the top face and refills to 60% of whichever ceiling binds
   (`platform/app/src/App.cpp`, `DECISIONS.md` D63/D68). Tilt it and it pours.
@@ -266,19 +376,27 @@ PARTSIM_PORT=/dev/cu.usbserial-XXXX python3 ../../scripts/console.py r
 `scripts/console.py` drives the console non-interactively; it reads until the port goes quiet,
 because the interesting commands block for tens of seconds without printing a terminator. The
 commands that matter: `r` (frame timing and memory), `x` (**the particle sweep — this is the
-measurement that decides the particle count**), `t` (orientation test pattern), `m` (mount table),
+measurement that decides the particle count**), `t` (orientation mode, §M3), `w` (the walk, §6.3),
+`m` (mount table),
 `g` (the determinism sequence, ~30 s).
 
 ### 6.3 The thing to do first, before the fluid
 
-**Light one LED at a time and watch the cube.** Orientation, face order, serpentine and rotation are
-four independent ways to be wrong, and a fluid simulation is the worst possible instrument for
-telling them apart — it looks plausible when it is completely scrambled.
+**Light one LED at a time and watch the cube — the `walk`.** Strip order, face order, rotation,
+mirror and serpentine are five independent ways to be wrong, and a fluid simulation is the worst
+possible instrument for telling them apart: it looks plausible when it is completely scrambled.
 
-`Display::testPattern` exists for this and `PanelDriver::testPattern` (`PanelDriver.cpp:325`) shows
-the convention: one hue per face, a white marker at texel (1,1), a short arm along +x and a longer
-one along +y — two different lengths so a 90° rotation is distinguishable from a mirror at a glance.
-**Implement that first.** At 8×8 the arms have to shrink; keep them different lengths.
+A `w <n>` command lighting strip index `n` alone, and `w` stepping to the next, settles the physical
+wiring in a couple of minutes — which face the chain enters first, which corner of that face, and
+whether rows alternate direction (§M2). Write it before anything else; it is fifteen lines and it
+is the only tool that can distinguish a driver bug from a mount-table bug.
+
+**Then orientation mode (§M3)**, which settles everything above the strip: the eight corner colours,
+live, with `m` corrections applied as you type them. Walk around the cube; every corner must show
+one colour on all three faces that meet at it.
+
+Only once both read correctly should the fluid go on the cube. A wrong mount table makes a correct
+simulation look broken and an incorrect one look fine.
 
 ### 6.4 The three measurements worth reporting
 
@@ -288,7 +406,7 @@ one along +y — two different lengths so a 90° rotation is distinguishable fro
 2. **`show()` cost.** 384 LEDs × 24 bits × 1.25 µs = **11.5 ms**, a hard floor from the protocol —
    35% of a 33 ms frame, and it caps the refresh at ~87 Hz however fast the CPU is. Measure what it
    actually costs including the resolve and the mapping; the `blit` column in `r` is already there.
-3. **The real current draw**, if a meter is available. §3's 21 A is arithmetic from a datasheet.
+3. **The real current draw**, if a meter is available. §M4's 21 A is arithmetic from a datasheet.
 
 ---
 
@@ -297,7 +415,7 @@ one along +y — two different lengths so a 90° rotation is distinguishable fro
 1. **Bit-banged WS2812B disables interrupts for the whole frame.** 11.5 ms with interrupts off will
    break WiFi and ESP-NOW, and beaker chaining is a radio feature. **Use the RMT or I2S driver.**
    FastLED and NeoPixelBus both offer one on ESP32; FastLED additionally has
-   `setMaxPowerInVoltsAndMilliamps`, which is §3's limiter already written — but **turn its colour
+   `setMaxPowerInVoltsAndMilliamps`, which is M4's limiter already written — but **turn its colour
    correction and temperature off** (`setCorrection(UncorrectedColor)`), or it will fight the
    palette resolve and the rendered colour will no longer be what the simulation computed.
 2. **3.3 V into a WS2812B data pin is marginal.** The part wants 0.7·V<sub>DD</sub> = 3.5 V. It
@@ -330,8 +448,13 @@ one along +y — two different lengths so a 90° rotation is distinguishable fro
 
 ## 8. Definition of done
 
-- The test pattern lands correctly on all six faces: face order, rotation, mirror and serpentine all
-  verified **by looking at the object**, with the mount table that produced it recorded.
+- **The walk works**: one LED at a time, so the strip order and whether rows alternate are facts
+  rather than assumptions.
+- **Orientation mode works and is a mode**: eight corner colours, live `m` corrections including a
+  slot swap, and every corner agreeing across the three faces that meet at it — verified **by
+  looking at the object**, with the resulting mount table recorded in a form that survives a reboot.
+- The corner pattern is generated from `Geometry` and has a host test, including one that asserts a
+  deliberately wrong mount is **detected**.
 - The fluid runs, tilts and settles, at a measured frame rate, with the particle count that
   measurement supports rather than the one this document guessed.
 - Beaker mode pours out of the open top.
