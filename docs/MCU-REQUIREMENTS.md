@@ -81,6 +81,22 @@ two cores with no panels attached:
 So one S3 gives a beaker **a quarter full at 7 fps**, or a two-unit film in a 32-unit box at a
 comfortable frame rate. Cost grows as `n^1.77`, so the shortfall is worse than proportional.
 
+### And a caveat the whole section depends on
+
+**Every requirement above is a property of the representation, not of the picture.** The figures
+assume the carrier liquid is simulated as particles. `DESIGN-SUGGESTIONS.md` §13 measures the
+alternative -- dye as a small fixed-point field, with the water implicit -- at **12-29% of one S3
+core for a full volume**, against the 0.68 fps PBF would give for the same full beaker. The
+`n^1.77` growth that makes the shortfall "worse than proportional" is exactly what disappears: a
+full field and an empty one cost the same.
+
+That does not make this document wrong; it makes its scope explicit. If the cube keeps PBF for the
+bulk liquid, the 9.2x stands. If it adopts the field, the binding constraint moves to the **blit**
+-- ~9.0 ms per display node per frame, unaffected by the solver -- and REQ-MCU-1's hardware divide
+and square root stop being decisive, because a fixed-point kernel uses neither.
+
+Settle which representation ships before buying silicon against this table.
+
 ---
 
 ## 3. REQ-MCU: what a candidate must have

@@ -1,6 +1,14 @@
 # Design suggestions: MCU-friendly ink-in-water simulation
 
-Status: design proposal; not yet implemented.
+Status: design proposal. The cost case is **measured** (section 13); the field itself is partly
+built -- `core/src/InkField.cpp` covers section 2, and the projections of section 3 are not written
+yet.
+
+Everything in section 13 was measured rather than estimated, and it is the reason to take the rest
+seriously: the advection step costs 5.9-14.4 ms on an ESP32-S3 against 732 ms/step for the
+particles a physically full beaker would need. What this document proposes is not a faster
+simulation of the same thing, it is a simulation of a different thing -- the dye, rather than the
+water carrying it.
 
 This document targets the visual reference supplied for the project: coloured ink dispersing
 through clear liquid, reduced to the resolution and colour depth of the LED cube. The important
@@ -35,7 +43,7 @@ set of cues:
 
 The existing PBF solver spends most of its time on properties that are not in that list: particle
 neighbour gathering, incompressibility constraints, wall-density compensation, collision
-corrections, and XSPH. The measured result in [`docs/RESOURCES.md`](docs/RESOURCES.md) is 71.56 ms
+corrections, and XSPH. The measured result in [`RESOURCES.md`](RESOURCES.md) is 71.56 ms
 per solver step at 512 particles on the ESP32-S3; two 60 Hz steps per displayed frame limit that
 configuration to about 7 fps. A physically full beaker is 1,905 particles at the old beaker
 spacing. The current renderer also ignores water farther than 8 of the cube's 32 world units from
@@ -80,6 +88,19 @@ Sixteen cells across the cube is intentionally below the panel resolution. Trili
 projection through several depth cells, and bilinear output scaling hide the grid. If 16^3 is not
 enough, test 20^3 before adding more fluid physics.
 
+**And 20^3 genuinely fits.** Measured advection cost per step on an S3, at the pessimistic end of
+the two scaling factors in section 13, against a 20 Hz field:
+
+| Grid | ms/step | one core, at 20 Hz |
+|---:|---:|---:|
+| 12^3 | 6.1 | 12% |
+| **16^3** | **14.4** | **29%** |
+| 20^3 | 28.0 | 56% |
+| 24^3 | 48.4 | 97% |
+
+So the fallback ladder in section 11 is a budgeted ordering rather than a preference: 24^3 is the
+wall, and there is room above 16^3 to spend if the projections turn out to need it.
+
 ### 2.2 A procedural velocity field
 
 The ink needs coherent motion, but it does not need a fully solved velocity grid. Evaluate velocity
@@ -97,6 +118,13 @@ A `Vorton` is a small flow primitive: centre, axis, radius, strength, and remain
 radius it contributes a tangential velocity proportional to `cross(axis, position - centre)` and a
 LUT falloff. It does not collide with anything and has no neighbours. Eight vortons should occupy
 well under 256 bytes.
+
+**Their storage is not the cost that matters; their evaluation is.** The velocity above is
+evaluated once per cell per step, so eight vortons plus two curl modes is 4096 cross products and
+falloff lookups per update. Measured, that is **50% of the whole advection step** -- the single
+largest term in this design, and the one an earlier draft of this document budgeted in bytes
+rather than in cycles. Size the vorton count against that figure, not against 256 bytes. section 11
+has the cheaper evaluation, and what it is actually worth.
 
 Create vortons in deterministic pairs when:
 
@@ -123,14 +151,29 @@ newDye = trilinearSample(oldDye, source)
 ```
 
 This is the same useful stability property already used by
-[`core/src/FieldGrid.cpp`](core/src/FieldGrid.cpp), but the MCU version should use fixed point:
+[`core/src/FieldGrid.cpp`](../core/src/FieldGrid.cpp), but the MCU version should use fixed point:
 
 - cell coordinates in Q8.8 or Q12.4;
 - 8-bit trilinear weights whose sum is 256;
 - 16- or 32-bit intermediates for the eight weighted samples;
 - LUTs for radial falloff and periodic flow modes;
 - no divide, square root, or transcendental in the cell loop;
-- one calculation of the source coordinate shared by every dye channel.
+- one calculation of the source coordinate shared by every dye channel;
+- **round, never truncate, when narrowing the weighted sum.** Truncation error is one-sided, so
+  every cell leaks up to one count per step. Measured at 21% of the dye gone in six steps with no
+  flow at all -- and it presents as exactly the diffusion this section warns about below, so the
+  natural "fix" is to tune a decay constant that was never the cause;
+- **agree on where a cell sits.** If the loop puts cell `x` at coordinate `x + 0.5` while the
+  sampler and the injector put it at `x`, the zero-velocity gather samples halfway between two
+  cells and slides the entire field half a cell every step. It reads as a settling bias, and it
+  moves the dye the same way whichever direction gravity points;
+- **no flux through the container wall.** Drop the outward normal velocity component in the
+  outermost cell. Without it, every backtrace that leaves the grid clamps to the same edge sample,
+  so dye driven against a wall is duplicated rather than piled up -- 93x mass gain in ten steps with
+  the plume in a corner, which looks like the ink glowing where it touches the glass.
+
+None of those three is visible as a defect in a rendered frame; all three look like plausible
+fluid behaviour. They are listed here because a field this small has no other error signal.
 
 Run field physics at 20 Hz initially and render at 30 Hz. Ink movement is slow and continuous; it
 does not need the 60 Hz rate required by the current granular contact model. If the field visibly
@@ -180,9 +223,13 @@ for each voxel from the panel inward:
     transmittance *= 255 - alpha
 ```
 
-The exact scaling should use integer arithmetic and saturation. Opposite faces traverse the same
-field in opposite depth order. Upscale the `16x16` result to 32x32 or 64x64 with bilinear filtering,
-then pass it through the existing quantisation and panel mapping.
+The exact scaling should use integer arithmetic and saturation -- **including the colour mix, which
+the pseudocode above hides a divide inside.** `mix()` by dye mass wants a division by `dyeA + dyeB`;
+take the reciprocal from a 512-entry LUT instead. On a host with hardware divide this is worth only
+6%, which understates it: the rule in section 2.3 exists because the target has no such thing.
+
+Opposite faces traverse the same field in opposite depth order. Upscale the `16x16` result to 32x32
+or 64x64 with bilinear filtering, then pass it through the existing quantisation and panel mapping.
 
 At 16^3, six complete projections visit only `6 * 16^3 = 24,576` voxel samples per rendered frame.
 A display node that owns two faces visits 8,192. This is independent of panel resolution until the
@@ -200,7 +247,7 @@ some of the missing carrier-liquid cues:
 - slower gravity-driven motion than the existing fire field;
 - optional faint edge or meniscus highlights when a free surface is enabled.
 
-[`docs/DECISIONS.md`](docs/DECISIONS.md) D72 already found that strong browser bloom hides beaker
+[`DECISIONS.md`](DECISIONS.md) D72 already found that strong browser bloom hides beaker
 colour. Keep bloom off for comparison images and tune the panel output first.
 
 ### 3.3 Preserve cube continuity
@@ -221,7 +268,11 @@ Reuse the separation already present in `MotionSource`:
 
 - low-pass object-space gravity sets the plume's settling direction;
 - high-pass container acceleration adds a decaying bulk impulse and spawns vorton pairs;
-- gyroscope angular velocity adds approximate solid-body rotation, `omega x radius`;
+- gyroscope angular velocity adds approximate solid-body rotation, `omega x radius` -- **this one
+  needs a new accessor.** `MotionSource` consumes the gyro for its complementary filter and bias
+  tracking but publishes only `down()`, `gyroBias()`, `trust()` and `containerAccel()`; angular
+  velocity never leaves the class. The low-pass/high-pass split this section relies on is genuinely
+  already there, but `omega` is not;
 - a short impulse envelope preserves follow-through after the user's hand stops.
 
 The bulk field should not rotate instantly with small accelerometer noise. Update its gravity basis
@@ -264,6 +315,13 @@ struct InkSpillParcel {
 };
 ```
 
+`InkSpillParcel` carries dye as `dyeA`/`dyeB` **masses**, while `SpillParticle` on the existing
+chain carries `cr`/`cg` as a normalised barycentric triple with blue implied. Both conventions are
+right where they are -- a field wants masses, because their sum is the opacity, which is exactly the
+denominator `M4-PLAN.md` section 2 found goes circular when a component is implied -- but they will
+coexist in one binary and a parcel crosses between them. Name the conversion in one place and say
+which end is authoritative, or the two will drift the way `Lsm6dsox::Raw` did (`DECISIONS.md` D42).
+
 When the fill surface crosses the open rim, remove a volume proportional to the outward flow and
 emit one or a few parcels. The receiver adds volume, injects the parcel's dye mass into cells below
 the impact point, and creates a vorton pair from its momentum. This preserves the properties that
@@ -283,22 +341,26 @@ Display nodes need concentration state, not the procedural velocity field. For a
 
 - two raw dye channels are 8,192 bytes per field frame;
 - three raw channels are 12,288 bytes;
-- at 20 MHz SPI these take about 3.3 ms and 4.9 ms respectively per broadcast;
+- at 20 MHz SPI these take about 3.3 ms and 4.9 ms respectively per broadcast -- and
+  `SPI-HANDOFF.md` records **10 MHz as a legitimate fallback**, at which they are 6.6 ms and 9.8
+  ms. Both still fit 20 Hz, but the fallback should be planned for rather than discovered;
 - at 20 updates/s the raw payload uses about 1.31 or 1.97 Mbit/s before framing.
 
 That fits the present broadcast topology, but it is larger than the current device-side
 `frameMaxBytes()` for 512 particles and the existing heat field. The format therefore needs an
 explicit version bump rather than overloading `heatBytes`.
 
-Suggested frame changes:
+Suggested frame changes. Three of these are **already true of `SimFrame` and must be kept rather
+than added** -- re-specifying them invites someone to re-litigate a solved problem:
 
 - add grid dimensions, dye channel count, and dye payload length to `FrameHeader`;
 - RLE each channel independently, since a young plume is mostly zero;
-- allow raw storage when RLE would expand the field;
-- checksum the complete payload;
+- allow raw storage when RLE would expand the field -- `rleEncode` currently refuses instead;
 - resize the DMA staging buffers from the actual field tier;
 - send only the current dye buffers, never ping/pong scratch or vortons;
-- hold the last valid field frame on a checksum or geometry mismatch, as display nodes do now.
+- *keep* the fletcher16 over header and body (`SimFrame.cpp`);
+- *keep* `geomHash`, which already rejects a mismatched pair of builds;
+- *keep* holding the last valid frame on a checksum or geometry mismatch.
 
 RLE is an optimisation, not a capacity assumption. A fully mixed field may be incompressible and
 must still fit raw. Delta tiles can be considered later if measured SPI time becomes relevant.
@@ -321,6 +383,8 @@ particles, especially sand. Add the ink backend beside it first.
 | `platform/wasm/bindings.cpp` and `platform/wasm/web/*` | Expose the ink tier, injection controls, and an unbloomed diagnostic view. |
 | `platform/host/` | Add a deterministic plume fixture, cube-net dump, benchmark, and memory report for 12^3/16^3/20^3. |
 | `tests/` | Add advection, mixing, bounds, determinism, wire-format, seam, no-allocation, and budget tests. |
+| `core/src/RenderState.cpp` | The ink grid's dimensions must be derived in ONE place, the way `heatCellSize`/`heatGridDim` already are. `FieldGrid.cpp` carries the warning: two copies of the derivation fail silently, as a plume drawn in the wrong place rather than as an error. |
+| `scripts/golden_hash_esp32.txt` and friends | A new tier owes a state and pixel hash on each target -- ROADMAP W2 calls this "the ongoing tax". Budget it rather than discovering it. |
 | `core/CMakeLists.txt`, `core/library.json` | Register the new source/header for all three targets. |
 | `scripts/check_esp32_budget.sh` | Assert the named ink tier's internal-SRAM pools and DMA staging buffers. |
 
@@ -366,6 +430,12 @@ Choose the smallest grid whose panel output is not visibly worse at normal viewi
 3. Add aggregate spill parcels and receiver injection.
 4. Add ballistic between-vessel droplets only after the field transfer works.
 5. Upgrade the surface model only if a panel render identifies a specific failure.
+6. **Re-establish the chain's conservation guarantee -- it is not inherited.** M4's volume
+   accounting rests on particle identity, and `test_beaker_spill`, `test_spill_chain` and
+   `test_multinode` are all written against it. None of them carries over to a scalar volume plus
+   aggregate parcels. The property they protect still matters exactly as much: in a closed ring, a
+   lost packet must read as a lost packet and not as beakers quietly emptying over minutes, which
+   is what `SpillQueue::dropped` and `totalOut` exist to distinguish.
 
 ## 9. Tests and acceptance criteria
 
@@ -447,7 +517,12 @@ If the basic field is cheap and the image still lacks curl, upgrade in this orde
 1. longer-lived and paired vortons;
 2. one additional low-frequency curl mode;
 3. bounded post-advection sharpening;
-4. a coarse stored velocity field at 8^3, upsampled for the 16^3 dye field;
+4. a coarse stored velocity field at 8^3, upsampled for the 16^3 dye field. **Measured at 1.33x,
+   not the 8x the arithmetic suggests**: evaluating velocity at 512 nodes instead of 4096 removes
+   seven eighths of a term worth half the step, but trilinear interpolation of three velocity
+   components costs back 77% of what it saves. Still worth taking -- it is a 25% saving on the
+   advection step for 1.5 KB -- but it is tuning, not a structural fix, and nobody should re-derive
+   the 8x and be disappointed;
 5. a small number of pressure iterations on that 8^3 velocity field.
 
 Do not jump directly to a 16^3 three-component ping-ponged velocity field. At 8-bit components it
@@ -465,3 +540,89 @@ That does not prove a particular frame rate on an unmeasured MCU. It does remove
 reason the current beaker needs far more than an ESP32-S3. It also targets the supplied visual more
 directly: the state being simulated is the thing the viewer sees -- coloured concentration and its
 coherent motion -- instead of thousands of invisible carrier-liquid interactions.
+
+---
+
+## 13. What this actually costs, measured
+
+Everything above was written as a proposal. This section is measurement, and it is what the
+proposal now rests on.
+
+**Method.** The advection loop of section 2 and the projections of section 3.1 were implemented as
+a standalone fixed-point kernel and timed on the host, then converted with two factors this
+repository has measured on hardware:
+
+| calibration workload | host | device | factor |
+|---|---|---|---|
+| solver, float and gather-heavy | 0.739 ms | 74.65 ms | **101x** |
+| splat + resolve, integer | 0.093 ms | 22.96 ms | **247x** |
+
+Integer code scales **2.4x worse** to the S3 than the float solver does, because the host
+vectorises it and Xtensa cannot. That is the opposite of the intuition that an integer kernel must
+port well, and it is why every figure below is given as a range between the two factors rather than
+resting on one.
+
+### 13.1 The field
+
+| | S3, projected |
+|---|---|
+| advect 16^3, velocity per cell | **5.9 - 14.4 ms** |
+| advect 16^3, 8^3 velocity lattice | 4.4 - 10.8 ms |
+| six 16x16 projections | 1.8 - 4.3 ms |
+| two faces only, a display node | 0.6 - 1.4 ms |
+
+At the 20 Hz field / 30 Hz display of section 2.3, that is **12-29% of one core** on the master and
+**2-4%** on a display node.
+
+### 13.2 Against PBF, for the same picture
+
+The comparison that matters is not 512 particles -- it is the *full* beaker the reference image
+shows. At `d = 2.5` that is 1,905 particles, and the solver's own measured `n^1.77` gives:
+
+```
+PBF, 1905 particles      732 ms/step  ->  1465 ms/frame  ->  0.68 fps
+ink field, full volume   5.9 - 14.4 ms/step                  51x - 125x
+```
+
+The multiple is not the point. **The shape is**: PBF's cost grows with how full the vessel is, and
+the field's does not. A full 16^3 field and an empty one cost the same, and that is the property
+`MCU-REQUIREMENTS.md`'s "beaker needs 9.2x an S3" turns out to depend on.
+
+### 13.3 What this means for the MCU question
+
+An S3 can run the whole simulation. Whether one S3 can run the whole *cube* depends on panel
+output, not on physics:
+
+| one S3 doing everything | resolve + blit | total |
+|---|---|---|
+| six 32x32 faces | 3.4 + 6.7 ms | **47-72%** of a core -- fits |
+| six 64x64 faces | 13.5 + 26.9 ms | **138-163%** -- does not fit |
+
+So the three display boards remain necessary at 64x64, but for **panel bandwidth, not for
+physics**. After this change the master is nearly idle and the cost concentrates in the blit --
+~9.0 ms per display node per frame, untouched by anything in this document. That, and not the
+choice of processor, is the next thing worth optimising.
+
+A faster part helps less than the existing tables suggest. Compiling the kernel for RV32IMAFC and
+Xtensa LX7 and applying `RESOURCES.md`'s own formula:
+
+| workload | RV32/Xtensa instrs | P4 speedup |
+|---|---|---|
+| ink advection | 0.88 | **2.12x** |
+| ink projection | 1.13 | **1.65x** |
+
+Most of the P4's advantage over Xtensa was hardware float divide and square root -- `REQ-MCU-1` is
+written the way it is for exactly that reason. This kernel uses neither by design, so the advantage
+narrows to clock speed, on a workload already at 29% of an S3.
+
+### 13.4 What none of this establishes
+
+**Whether it looks right.** Every figure here is cost. The plume's coherence, whether tendrils
+survive semi-Lagrangian diffusion, and whether a 16x16 projection upscaled 4x to a 64x64 panel
+reads as ink -- none of that is measured, and none of it follows from the cost being low. Phase A
+exists to answer it, and it remains the real risk in this proposal. The cost case was never the
+doubtful part.
+
+Two narrower caveats: the kernel timed here is the two hot loops, without active-bounds tracking,
+injection, a surface or wire encoding; and the `n^1.77` extrapolation runs 3.7x past its measured
+range, so 0.68 fps is an order of magnitude rather than a figure.

@@ -348,6 +348,22 @@ usable as conversions rather than as one-off observations:
 
 **QEMU wall-clock x 3.0 = the S3**, on this laptop. Useful, and not portable to another machine.
 
+**And the host is not one factor but two.** Converting a host timing to the S3 depends on what
+kind of work it is, far more than this section previously implied:
+
+| workload | host | hardware | factor |
+|---|---|---|---|
+| solver, float and gather-heavy, esp32 profile @512 | 0.739 ms | 74.65 ms | **101x** |
+| solver, beaker tier @512 | 0.816 ms | 71.56 ms | **87.7x** |
+| splat + resolve, integer, 6 panels of 32x32 | 0.093 ms | 22.96 ms | **247x** |
+
+**Integer render code scales 2.4x worse to the S3 than the float solver does.** That is worth
+stating plainly because the intuition runs the other way -- the solver is the part paying for
+software divide and square root, so it "should" be the one that ports badly. It is not: this host
+vectorises the integer accumulation loops and Xtensa cannot, and that outweighs the S3's missing
+float instructions. Any host-measured estimate for a new integer kernel that uses the solver's
+factor will be optimistic by more than a factor of two.
+
 **QEMU icount x 1.47 = the S3**, on any machine — and this one is *derived*, not fitted. icount
 advances virtual time at 4 ns per instruction, i.e. 250 MHz at 1 IPC. The S3 runs at 240 MHz, and
 the two independent measurements give its real CPI on this workload:
@@ -410,6 +426,27 @@ $$\text{relative speed} = \frac{1}{\text{instr ratio}} \times \frac{1.40}{\text{
 | i.MX RT1176 | Cortex-M7 | 1000 | 0.81 | 1.15 | **6.3x** | assumed |
 
 Relative to an S3 that is itself now 1.18x faster than when the beaker table below was computed.
+
+> **The 0.81 in that table is stale, and it flatters every non-Xtensa part.** It was measured
+> against `solveIteration()`, which is now a dispatch wrapper -- the work moved into
+> `correctionPasses` and `densityPass`. Re-measured on the current code by the same method
+> (`-O2 -ffp-contract=off`, each vendor's own GCC, instructions counted per function):
+>
+> | | Xtensa LX7 | RV32IMAFC | ratio |
+> |---|---:|---:|---:|
+> | `correctionPasses` | 725 | 730 | 1.01 |
+> | `densityPass` | 248 | 233 | 0.94 |
+> | **both** | **973** | **963** | **0.99** |
+>
+> RV32 needs essentially the SAME instruction count as Xtensa now, not 19% fewer. That drops the
+> **ESP32-P4 from 2.3x to 1.89x**. The Cortex-M rows have not been re-measured and still carry the
+> old 0.81; they are likely optimistic by a similar margin. Re-run this before any part is bought
+> on the strength of that column.
+>
+> Note also that this ratio is workload-specific. For the integer ink kernel of
+> `DESIGN-SUGGESTIONS.md` the same measurement gives 0.88 for advection and 1.13 for the volume
+> projection -- so the P4's advantage there is 2.12x and 1.65x. Most of what the P4 buys over
+> Xtensa is hardware float divide and square root, and a fixed-point kernel does not use either.
 
 **CPI is the weak term and it is the one that decides the answer.** The S3's 1.40 is measured and
 includes its SRAM stalls. Cortex-M7 is dual-issue in-order with a 6-stage pipeline and, crucially,
