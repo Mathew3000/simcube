@@ -35,7 +35,10 @@ def find_port():
     p = os.environ.get("PARTSIM_PORT")
     if p:
         return p
-    ports = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.wchusbserial*"))
+    # cu.usbserial-* and cu.SLAB_USBtoUART are the CP2102/CH340 bridges on a plain ESP32 devkit,
+    # which has no native USB at all -- see MINI.md.
+    ports = sorted(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.wchusbserial*") +
+                   glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.SLAB_USBtoUART*"))
     if not ports:
         sys.exit("no board found (looked for /dev/cu.usbmodem*); set PARTSIM_PORT")
     return ports[0]
