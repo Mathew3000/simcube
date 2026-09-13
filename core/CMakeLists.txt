@@ -10,6 +10,7 @@ add_library(partsim_core STATIC
   src/PaletteData.cpp
   src/Simulation.cpp
   src/FieldGrid.cpp
+  src/InkField.cpp
   src/ScenePresets.cpp
   src/MotionSource.cpp
   src/ChainMap.cpp

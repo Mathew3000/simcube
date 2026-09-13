@@ -46,6 +46,7 @@
 //   cube    32x32 x6, everything, d=3.0, 6-bit   what ships today (the plain ESP32 profile)
 //   beaker  64x64,    water only, d=2.5, 6-bit   liquid-only, so 30Hz physics is available
 //   future  64x64,    everything, d=1.0          host-verified only; no MCU runs it
+//   ink     any,      dye field, no bulk PBF      the carrier liquid is implicit
 //
 // Each sets only what it means to change; everything else falls through to the defaults below.
 //
@@ -100,6 +101,26 @@
 #define PARTSIM_MAX_PARTICLES 24000
 #define PARTSIM_MAX_GRID_CELLS 8192
 #define PARTSIM_MAX_FIELD_CELLS 40000
+#endif
+
+
+#ifdef PARTSIM_TIER_INK
+// Dye dispersing through a clear carrier liquid, held as a field rather than as particles.
+// See docs/DESIGN-SUGGESTIONS.md for why, and for the measurements behind the grid size.
+//
+// The carrier liquid is IMPLICIT here: an empty cell means clear water, not empty space. That is
+// the whole saving, so sand and heat go too -- neither has a meaning in a beaker of ink, and both
+// cost accumulation channels the dye wants. Chroma is on for the same reason it is on for the
+// beaker tier: dye that cannot mix is not dye.
+//
+// The PBF pools are deliberately NOT shrunk here yet. Phase C is where the tier stops carrying
+// storage it never touches; doing it now would change what the existing presets at this spacing
+// can hold before there is anything to hold it.
+#define PARTSIM_ENABLE_SAND 0
+#define PARTSIM_ENABLE_HEAT 0
+#define PARTSIM_ENABLE_CHROMA 1
+#define PARTSIM_ENABLE_INK 1
+#define PARTSIM_REST_SPACING 2.5f
 #endif
 
 #ifdef PARTSIM_PROFILE_ESP32
@@ -472,6 +493,46 @@ struct MaterialParams {
   float friction;          // tangential correction damping, 0 = frictionless
   float staticVelocity;    // below this speed, treat as at rest (stops pile creep)
 };
+
+
+// --- ink field -------------------------------------------------------------
+// A dye concentration grid advected by a procedural flow, as an alternative to simulating the
+// carrier liquid as particles. Off unless a tier asks for it, and it costs nothing when off.
+#ifndef PARTSIM_ENABLE_INK
+#define PARTSIM_ENABLE_INK 0
+#endif
+
+// Sixteen cells across the cube, deliberately BELOW the panel resolution: trilinear advection,
+// projection through several depth cells and a bilinear upscale hide the grid, and the measured
+// cost is quadratic-ish in the edge (12^3 6.1 ms, 16^3 14.4 ms, 20^3 28.0 ms, 24^3 48.4 ms per
+// step on an S3 at the pessimistic scaling). 24^3 is the wall at 20 Hz; 20^3 fits with room.
+#ifndef PARTSIM_INK_DIM
+#define PARTSIM_INK_DIM 16
+#endif
+
+// Two dye masses, not a hue. Opacity is their sum and colour is their ratio, which is what makes
+// red plus blue read as magenta without storing RGB per cell -- and it sidesteps the circular
+// denominator that M4-PLAN 2 hit when a colour component is implied rather than stored.
+#ifndef PARTSIM_INK_CHANNELS
+#define PARTSIM_INK_CHANNELS 2
+#endif
+
+// Flow primitives. Eight is the document's figure; the cost that matters is not their storage
+// (well under 256 bytes) but that the velocity they define is evaluated per cell per step, which
+// measures at HALF the advection step. See kInkVelocityLattice.
+#ifndef PARTSIM_MAX_VORTONS
+#define PARTSIM_MAX_VORTONS 8
+#endif
+
+constexpr int kInkDim = PARTSIM_INK_DIM;
+constexpr int kInkCells = kInkDim * kInkDim * kInkDim;
+constexpr int kInkChannels = PARTSIM_INK_CHANNELS;
+constexpr int kMaxVortons = PARTSIM_MAX_VORTONS;
+
+// Grid coordinates are Q8.8 throughout the cell loop: 8 fractional bits is one 256th of a cell,
+// and the trilinear weights derived from them sum to exactly 256.
+constexpr int kInkFracBits = 8;
+constexpr int kInkOne = 1 << kInkFracBits;
 
 // --- rendering -------------------------------------------------------------
 constexpr float kSplatInfluence = 8.0f;  // depth beyond which a particle lights nothing
