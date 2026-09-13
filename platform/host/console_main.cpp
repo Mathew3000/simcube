@@ -95,7 +95,15 @@ NullMotionSensor g_imu;
 NullFrameLink g_link;
 HostHooks g_hooks;
 
-const Platform g_plat{&g_console, &g_clock, &g_display, &g_imu, &g_link, &g_hooks};
+// Designated initialisers rather than positional: adding a member to Platform must not silently
+// shift every pointer after it into the wrong slot.
+const Platform g_plat{.console = &g_console,
+                      .clock = &g_clock,
+                      .display = &g_display,
+                      .imu = &g_imu,
+                      .link = &g_link,
+                      .chain = &nullSpillTransport(),
+                      .hooks = &g_hooks};
 App g_app(g_plat);  // holds a whole Simulation, so global rather than on main's stack
 
 }  // namespace

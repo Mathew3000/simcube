@@ -172,6 +172,9 @@ class App {
   uint32_t rxStarved_ = 0;  // polls that found nothing: the node holds its last frame
 #else
   Simulation sim_;
+  // Beaker mode's end of the chain. Inert on a closed cube -- pump() returns immediately when no
+  // face is open -- so it costs a branch a frame on every other tier.
+  SpillChain chain_;
 #endif
 #ifdef PARTSIM_PROFILE_ESP32_MASTER
   uint8_t txFrame_[frameMaxBytes()];

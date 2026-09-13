@@ -127,14 +127,17 @@ SpiDisplayLink g_spiDisplay;
 CoreParallel g_coreParallel;
 #if PARTSIM_ENABLE_RADIO
 EspNowLink g_chain;
-// Bring-up state for the `n` console command: synthetic spill packets, so the transport and the
-// wire format can be proven across two boards before item B exists to produce real ones.
-partsim::SpillReceiver g_chainRx;
-uint32_t g_chainSeq = 0;
-uint32_t g_chainTotalOut = 0;
-uint32_t g_chainIn = 0;
 #endif
-Platform g_plat{&g_console, &g_clock, &g_panels, &g_imu, &g_nullLink, &g_hooks};
+// Designated initialisers rather than positional: adding a member to Platform must not silently
+// shift every pointer after it into the wrong slot. (Adding `chain` did exactly that, and only
+// the type mismatch on the last one made it a compile error rather than a null hooks pointer.)
+Platform g_plat{.console = &g_console,
+                .clock = &g_clock,
+                .display = &g_panels,
+                .imu = &g_imu,
+                .link = &g_nullLink,
+                .chain = &partsim::nullSpillTransport(),
+                .hooks = &g_hooks};
 App g_app(g_plat);  // ~137KB of pools, so global rather than anywhere near a stack
 
 Role g_role = Role::Master;
@@ -340,6 +343,7 @@ void setup() {
 #endif
 #if PARTSIM_ENABLE_RADIO && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
   if (g_chain.begin()) {
+    g_plat.chain = &g_chain;
     g_console.println("chain: ESP-NOW up (broadcast)");
   } else {
     g_console.println("WARNING: ESP-NOW peer/callback failed; no chaining");
@@ -385,49 +389,12 @@ void loop() {
   // it only gets time while the simulation is blocked in vTaskDelayUntil.
   g_app.consolePoll();
 
-#if PARTSIM_ENABLE_RADIO && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
-  // Chain bring-up: SYNTHETIC spill, once a second, until item B produces real spill to send.
+  // The chain is NOT pumped here any more.
   //
-  // Here rather than behind a console command because the console dispatch lives in the
-  // platform-neutral App, and ESP-NOW has no business in a layer that compiles for the host. It is
-  // scaffolding: when the spill queue exists this becomes a drain of it on the step task.
-  if (g_chain.ready()) {
-    static uint32_t lastSend = 0;
-    const uint32_t now = millis();
-    if (now - lastSend >= 1000) {
-      lastSend = now;
-      partsim::SpillParticle items[4];
-      for (int i = 0; i < 4; ++i) {
-        items[i].pos = Vec3{-15.0f + (float)i, 12.0f, 0.0f};
-        items[i].vel = Vec3{0.0f, -8.0f, 0.0f};
-#if PARTSIM_ENABLE_CHROMA
-        items[i].cr = (uint16_t)(kChromaOne);  // red, so a receiver can see dye survive the air
-        items[i].cg = 0;
-#endif
-      }
-      g_chainTotalOut += 4;
-      partsim::SpillHeader h;
-      h.seq = ++g_chainSeq;
-      h.totalOut = g_chainTotalOut;
-      uint8_t buf[partsim::kSpillMaxPayload];
-      const int n = partsim::encodeSpill(h, items, 4, g_app.volume().box(), buf, sizeof buf);
-      if (n > 0) g_chain.send(buf, n);
-    }
-
-    uint8_t rx[partsim::kSpillMaxPayload];
-    int len;
-    while ((len = g_chain.poll(rx, sizeof rx)) > 0) {
-      partsim::SpillParticle got[partsim::kSpillMaxPerPacket];
-      partsim::SpillHeader h;
-      const int m = partsim::decodeSpill(rx, len, g_app.volume().box(), got,
-                                         partsim::kSpillMaxPerPacket, h);
-      if (m < 0) continue;  // not ours, or damaged -- decodeSpill validated before writing
-      const uint32_t missed = g_chainRx.note(h, m);
-      g_chainIn += (uint32_t)m;
-      g_console.printf("chain rx: seq %u, %d particles, total %u, missed %u (shortfall %u)\n", h.seq,
-                       m, g_chainIn, missed, g_chainRx.shortfall());
-    }
-  }
-#endif
+  // It used to be, with synthetic packets, because item B's spill queue did not exist yet. Now
+  // that it does, the pump runs inside the frame -- App::simStep, right after advance() -- for a
+  // reason that is not tidiness: Simulation clears its spill queue at the top of every frame, and
+  // this task is the lowest-priority one on the board. A pump here would send whichever particles
+  // happened to survive the race, at whatever rate the console thread got scheduled.
   delay(10);
 }

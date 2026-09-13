@@ -7,6 +7,8 @@
 #include "partsim/app/FrameLink.h"
 #include "partsim/app/MotionSensor.h"
 
+#include "partsim/SpillChain.h"
+
 namespace partsim {
 namespace app {
 
@@ -50,6 +52,10 @@ struct Platform {
   Display* display = nullptr;
   MotionSensor* imu = nullptr;
   FrameLink* link = nullptr;
+  // The chain between cubes, for beaker mode. Defined in core/ rather than here because the pump
+  // above it is core's and the tests link only core -- see SpillChain.h. Null-carrier by default,
+  // so a board with no radio and a board whose radio failed to start run the same path.
+  SpillTransport* chain = &nullSpillTransport();
   SystemHooks* hooks = nullptr;
 };
 

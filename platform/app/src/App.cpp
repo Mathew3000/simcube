@@ -32,6 +32,7 @@ bool App::begin(Role role) {
                     {plat_.display, "display"},
                     {plat_.imu, "imu"},
                     {plat_.link, "link"},
+                    {plat_.chain, "chain"},
                     {plat_.hooks, "hooks"}};
     bool ok = true;
     for (const auto& r : required)
@@ -84,7 +85,25 @@ bool App::begin(Role role) {
     c.println("FATAL: simulation init failed -- capacities too small for this geometry");
     return false;
   }
+#ifdef PARTSIM_TIER_BEAKER
+  // The beaker tier IS the open vessel -- that is what the tier means -- so the face is opened
+  // here rather than by a console command nobody would send. Every other tier leaves it closed
+  // and every line of the chain below is then inert, which is what keeps beaker mode a mode.
+  sim_.setOpenFace(kOpenPosY);
+  // Refilled to a FRACTION of capacity, which is not tuning but a requirement of chaining: the
+  // scene preset fills to 100% of the pool, and the first hardware run then had every one of 229
+  // arrivals rejected for want of room while the sending beaker emptied. A ring conserves volume
+  // only if each beaker can hold its own fill plus whatever is in flight toward it.
+  if (!sim_.init(mode, (kMaxParticles * 3) / 5, 0xBEA6u, kPanelRes)) {
+    c.println("FATAL: beaker refill failed");
+    return false;
+  }
+  // No scene drift in a beaker: the cycle would refill it mid-pour and the fill level is the
+  // thing the user is looking at.
+  sim_.setAutoCycle(false);
+#else
   sim_.setAutoCycle(true);
+#endif
   c.printf("simulation: %d particles, capacity %d\n", sim_.particleCount(), sim_.capacity());
 #endif
   return true;
@@ -154,6 +173,10 @@ void App::simStep() {
     }
     stats_.substeps = sim_.advance(1.0f / (float)kTargetFps);
   }
+  // HERE, and not on the console thread where the bring-up scaffolding used to poll the radio.
+  // Simulation clears its spill queue at the top of every frame, so a pump running anywhere else
+  // sends whatever survived the race rather than what the frame actually spilled.
+  chain_.pump(sim_, *plat_.chain);
 
   const uint32_t t1 = clk.micros();
   sim_.accumulate();
@@ -199,6 +222,16 @@ void App::masterStep() {
     for (int i = 0; i < substeps; ++i) {
       sim_.stepFixed();
       ++masterStep_;
+      // INSIDE the loop, because stepFixed() clears the spill queue per STEP -- unlike advance(),
+      // which clears once per frame. Pumping after the loop instead sends only the last substep's
+      // spill and silently discards the other half.
+      //
+      // It did exactly that, on hardware: of 198 particles poured, 98 were sent. The receiver
+      // still ended up with the right VOLUME, because the header's cumulative count made the
+      // missing half up out of clones -- which is why this cost nothing a particle count could
+      // see, and why the first version of this comment confidently explained that one pump per
+      // frame was the efficient choice.
+      chain_.pump(sim_, *plat_.chain);
     }
     stats_.substeps = substeps;
   }
@@ -273,6 +306,10 @@ void App::printHelp() {
   c.println("  g            run the golden determinism sequence (blocks ~30s)");
   c.println("  p            pause/resume the physics");
   c.println("  x            benchmark: particle sweep, needs no panels attached");
+  c.println("  o <x> <y> <z>  tilt: set object-space gravity by hand (whole numbers, 0 0 -1 etc)");
+#if PARTSIM_ENABLE_CHROMA
+  c.println("  d <r> <g>    this beaker's dye, 0-255 each (255 0 red, 0 255 green, 0 0 blue)");
+#endif
 }
 
 void App::printMounts() {
@@ -319,6 +356,24 @@ void App::printStats() {
   c.printf("particles %d/%d   scene %d (%s)%s\n", sim_.particleCount(), kMaxParticles,
            sim_.scene(), sceneAt(sim_.scene()).name,
            sim_.transitioning() ? "  [transitioning]" : "");
+#endif
+#ifndef PARTSIM_PROFILE_ESP32_DISPLAY
+  if (sim_.openFace() != kOpenNone) {
+    const SpillChain::Stats& cs = chain_.stats();
+    c.printf("beaker: open face %d, spilled %u (%u dropped by the queue)\n", sim_.openFace(),
+             (unsigned)sim_.spill().totalOut, (unsigned)sim_.spill().dropped);
+    c.printf("chain %s: out %u in %u packets, in %u in %u packets, bad %u\n", plat_.chain->name(),
+             (unsigned)cs.particlesOut, (unsigned)cs.packetsOut, (unsigned)cs.particlesIn,
+             (unsigned)cs.packetsIn, (unsigned)cs.bad);
+    if (cs.unsent)
+      c.printf("WARNING: %u spilled particles never reached a packet -- the queue is being"
+               " cleared between pumps\n", (unsigned)cs.unsent);
+    c.printf("chain losses: shortfall %u, made up %u, owed %u, no room for %u\n",
+             (unsigned)chain_.shortfall(), (unsigned)cs.madeUp, (unsigned)chain_.owed(),
+             (unsigned)cs.rejected);
+    const char* d = plat_.chain->diagnostic();
+    if (d && d[0]) c.println(d);
+  }
 #endif
   c.printf("internal heap free %u B, largest block %u B\n", (unsigned)plat_.hooks->freeHeap(),
            (unsigned)plat_.hooks->largestHeapBlock());
@@ -512,6 +567,50 @@ void App::handleLine(char* line) {
 #else
       sim_.setAutoCycle(!sim_.autoCycle());
       c.printf("auto-cycle %s\n", sim_.autoCycle() ? "on" : "off");
+#endif
+      break;
+
+#if PARTSIM_ENABLE_CHROMA && !defined(PARTSIM_PROFILE_ESP32_DISPLAY)
+    case 'd':
+      // The colour this cube IS, which is what makes a chain read as mixing: a red beaker pouring
+      // into a blue one. Set here rather than only in the browser because a cube on a shelf has no
+      // browser attached, and it does NOT survive a reboot yet -- see M4-E, which is where the
+      // configuration surface for a chain belongs.
+      if (argc >= 3) {
+        const int r = atoi(argv[1]), g = atoi(argv[2]);
+        const int rc = r < 0 ? 0 : (r > 255 ? 255 : r);
+        const int gc = g < 0 ? 0 : (g > 255 ? 255 : g);
+        // 8.8 fixed point: a byte per channel loses 98% of the dye to truncation over a few
+        // hundred diffusion steps (M4-A measured it), so what the user types is the high byte.
+        sim_.setDye((uint16_t)(rc * 256), (uint16_t)(gc * 256));
+      }
+      c.printf("dye %u %u (of 255; blue is what is left)\n", (unsigned)(sim_.dyeR() / 256),
+               (unsigned)(sim_.dyeG() / 256));
+      break;
+#endif
+
+    case 'o':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      c.println("orientation is the master's; a display node only draws what it receives");
+#else
+      // Tilting by hand, because a board with no IMU can never pour and beaker mode is entirely
+      // about pouring. Integers only: the console parses no floats anywhere and one decimal point
+      // is not worth an atof in a firmware that has otherwise avoided it. The vector is
+      // normalised, so `o 0 1 0` is the cube upside down and `o 1 -1 0` is a 45-degree lean.
+      if (argc >= 4) {
+        const Vec3 g{(float)atoi(argv[1]), (float)atoi(argv[2]), (float)atoi(argv[3])};
+        if (length2(g) < 0.001f) {
+          c.println("o: that vector has no direction");
+          break;
+        }
+        sim_.setGravityObject(normalize(g) * kGravityMag);
+        if (motion_.seeded())
+          c.println("note: the IMU is live and will overwrite this on the next frame");
+      }
+      {
+        const Vec3 g = sim_.gravityObject();
+        c.printf("gravity (object) %.2f %.2f %.2f\n", (double)g.x, (double)g.y, (double)g.z);
+      }
 #endif
       break;
 

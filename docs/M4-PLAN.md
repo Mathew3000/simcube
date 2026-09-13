@@ -95,14 +95,18 @@ claimed: it sharpens a dye boundary from 4 texels to 2 only when the gradient is
 weight kernel, so it buys a crisp **pour** — which is exactly what B creates — and nothing at all on
 a settled mix.
 
-### B. Open top and spill — **agent, ready now** (`M4-B-HANDOFF.md`)
+### B. Open top and spill — **DONE** (`623c71a`, `d848873`)
 
 `SimVolume` gains an open-face flag; `clampToBox` stops clamping there. Particles past it leave via
 the existing O(1) `removeAt` into an outbound list carrying position, velocity and chroma. Inbound
 spill enters near the top at the **same horizontal position** it left, so a stream leaving one
 corner arrives in the corresponding corner and reads as a pour rather than a teleport.
 
-Unblocked: A landed, so a spilled particle has dye to carry.
+**DONE.** `SimVolume::clampInto` replaced the free `clampToBox`, which is what found the FOURTH
+call site the brief did not count: `wallDensityAt` was compensating for a wall that is not there,
+inventing half a rest density of neighbours above the rim and pushing the surface away from the
+face the liquid leaves through — worth ~2x on the pour rate, and it pours either way, which is why
+nothing noticed. See `DECISIONS.md` D56-D60.
 
 ### C. Orientation gate, edge lines, glyphs — **DONE** (`773dede`)
 
@@ -116,13 +120,25 @@ inline hooks in `Renderer.h` (`addAccum` for weight, additive; `setAccum` for dy
 The overlay is an explicit call between `accumulate()` and `resolve()`, not part of
 `Simulation::render()`, which is why the pixel golden is unmoved. See `DECISIONS.md` D48-D52.
 
-### D. Chaining over ESP-NOW — **mine, in progress**
+### D. Chaining over ESP-NOW — **DONE** (`635357e`, and the pump)
 
 Radio on the master only (`DECISIONS.md` D34). Spill packets are tiny and neither latency- nor
 loss-critical, but a dropped packet in a closed loop silently drains total volume — so carry a
-cumulative spilled count per link and let the receiver make up a shortfall. Needs two devkits.
+cumulative spilled count per link and let the receiver make up a shortfall.
 
-### E. Browser, UI, reset — *agent, blocked on A+B+C*
+**DONE.** The wire format landed first (`635357e`); what completes it is `SpillChain` — the pump
+between `Simulation::spill()` and the carrier — plus a `beaker-chain` environment, a `d <r> <g>`
+console command for a cube's own dye and an `o <x> <y> <z>` one to tilt a board that has no IMU.
+
+Measured on two devkits, 20 seconds of pouring: **179 spilled, 179 sent in 140 packets, 179
+received; shortfall, made-up, refused and bad all zero.** 307 → 128 particles on the sender,
+307 → 486 on the receiver — conserved exactly.
+
+Two defects the measurement found, both of which every counter in the system had agreed were fine:
+the pump ran once per frame where the queue is cleared twice (half the pour crossed as clones, see
+`DECISIONS.md` D62), and a beaker filled to 100% of its pool has nowhere to put an arrival (D63).
+
+### E. Browser, UI, reset — **agent, ready now** (`M4-E-HANDOFF.md`)
 
 N beakers on one page, spill lists wired into a ring through the same core code the firmware runs.
 Per-beaker reset, colour pickers, fill readout. This is where chaining gets debugged.
@@ -137,9 +153,9 @@ Five jumper wires. See `SPI-HANDOFF.md`.
 ## 4. Order, and why
 
 ```
-   A (done) ────────┬──> B (agent, now) ──> E
-                    │
-   C (done) ────────┘    D (mine, now, meets B at the spill packet)
+   A (done) ────────┬──> B (done) ──> E (agent, now)
+                    │                 ↑
+   C (done) ────────┘    D (done) ────┘
    F (agent, needs wiring)
 ```
 
@@ -147,8 +163,10 @@ A and C are in. **B and D run alongside each other**, meeting at one shared type
 packet — which D defines in `core/` so both ends agree on it rather than converging by accident.
 B produces those packets and consumes them; D carries them between cubes.
 
-E stays unwritten until B lands, because a browser handoff whose spill interface does not exist yet
-would be speculative about the thing it is mostly made of.
+E stayed unwritten until B and D landed, because a browser handoff whose spill interface did not
+exist yet would have been speculative about the thing it is mostly made of. Both have landed, and E
+now inherits a pump (`SpillChain`) rather than having to invent one in JavaScript — which is the
+same argument that put `SimFrame` in core for the multi-node preview.
 
 ---
 
@@ -172,8 +190,9 @@ would be speculative about the thing it is mostly made of.
 
 - **Does the split kernel read as colour in the fluid, or as colour floating on it?** The risk is
   chroma looking detached from brightness at the surface.
-- **Does the top face render the liquid from above, or go dark to read as "open"?** The request only
-  says it draws no border lines.
+- ~~**Does the top face render the liquid from above, or go dark to read as "open"?**~~ **Settled
+  by M4-B's render**: it draws the liquid, and during a pour it is the most informative face on the
+  cube.
 - **How coarse can the particles stay?** F3 says colour resolution is `32/d` with the split kernel.
   At `cube`'s d=3.0 that is ~10 regions. Whether ten reads as mixing is a judgement, and it decides
   whether beaker mode runs at 8.5 fps or at 26.

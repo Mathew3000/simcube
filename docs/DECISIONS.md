@@ -1145,3 +1145,83 @@ beaker reset is a refill, not a return to a sealed cube. A receiver sees `totalO
 and should treat that as it treats a node that rebooted. Found by an assertion that read 150
 spilled particles out of a 75-particle beaker — the queue is a member, `init()` rebuilt everything
 around it, and the previous run's count carried straight over.
+
+### D61. The chain's carrier is injected into core/, not into the app layer **[STANDS]**
+
+`SpillTransport` — `send` / `poll` / `name` / `diagnostic` — lives in `core/include/partsim/SpillChain.h`,
+alongside the pump that uses it, rather than in `platform/app/` next to `FrameLink`.
+
+`FrameLink` is in the app layer because the thing above it is the app layer: `App::masterStep`
+encodes a frame and hands it over. The chain is different — the code above the carrier is
+`SpillChain::pump`, which is portable, has no platform in it, and is the part most worth testing:
+who sends what, when, and what a receiver does about a packet that never came. **Tests link only
+`partsim_core`.** A seam defined above core would have left the pump below it untestable, and the
+pump is where both defects in this item were.
+
+`EspNowLink` therefore implements a core interface, and `Platform::chain` defaults to
+`nullSpillTransport()` so a board with no radio, a board whose radio failed to start, and the host
+all run the identical path.
+
+One thing this cost: adding a member to `Platform` shifted every positional initialiser after it.
+Both platforms built it as `Platform{&console, &clock, ...}`, so `chain` silently took the `hooks`
+pointer. Only a type mismatch on the last argument made it a compile error rather than a null
+`hooks`. Both are designated initialisers now.
+
+### D62. The pump belongs inside the step loop, not after it **[CORRECTED ON HARDWARE]**
+
+`advance()` clears the spill queue once per **frame**; `stepFixed()` clears it once per **step**
+(D60). The master calls `stepFixed()` twice per frame, so a pump placed after that loop sees only
+the second substep's spill.
+
+It was placed after the loop, with a comment explaining that one pump per frame was the efficient
+choice at a radio whose cost is per packet. Measured on two boards: **of 198 particles poured, 98
+crossed the air.**
+
+What makes this worth an entry is why nothing caught it. The receiver's cumulative-count
+arithmetic — the mechanism built to survive a lost radio packet — made the missing half up out of
+clones, so the volume at the far end was correct, the ring conserved particles, and every counter
+on both boards added up. The pour was simply half copies.
+
+So the pump moved inside the loop, and `SpillChain::Stats::unsent` now names the failure directly:
+everything the beaker has ever spilled is either in a packet, refused by its own queue, or was
+never offered to the pump at all, and the third case is arithmetic the sender can do alone. The
+console prints a warning on any non-zero value. `chain_notices_spill_that_never_reached_a_packet`
+holds it.
+
+After the fix, same fixture: **179 spilled, 179 sent in 140 packets, 179 received, shortfall zero,
+made up zero, refused zero.** 307 → 128 particles on the sender, 307 → 486 on the receiver.
+
+### D63. A beaker fills to 60% of its pool, because a full one cannot receive **[STANDS]**
+
+The scene preset fills to 100% of the particle capacity. On the first two-board run every one of
+229 arrivals was rejected for want of room while the sending beaker emptied into nothing.
+
+A ring conserves volume only if each beaker can hold its own fill **plus whatever is in flight
+toward it**, and in a chain every beaker starts full at once. So the beaker tier refills to
+`(kMaxParticles * 3) / 5` rather than loading the preset's count.
+
+This is also why `injectSpill` returning false has to be counted rather than ignored: it is the
+only evidence that a chain is losing volume to a full vessel rather than to the air, and the two
+have opposite fixes.
+
+### D64. A cube's dye is a property of the cube, not of what is in it **[STANDS]**
+
+`Simulation::setDye` sets the dye on every particle now **and** on every particle spawned or
+filled later; an arrival keeps the dye it brought. A chained beaker starts red and becomes pink,
+and a refill after that must put red back rather than pink — the cube's identity is what it was
+configured with, not the average of its contents.
+
+Before this there was no way to set dye at all outside a test: every particle on a device was
+`(0, 0)`, which is blue. Console command `d <r> <g>`, 0-255 each, scaled into the 8.8 fixed point
+M4-A established. **It does not survive a reboot** — chain order and per-cube colour as persistent
+configuration belong with M4-E, which is where the whole configuration surface is.
+
+### D65. A node does not hear its own broadcast **[MEASURED]**
+
+Worth recording because the first hardware run looked as though it might. A node reported packets
+in with no peer sending, and self-reception would break a chain outright — a beaker would re-inject
+what it had just poured out.
+
+It was not that: the packets came from the other board's pre-reset life, before the test script's
+port open rebooted it. `EspNowLink::diagnostic()` now prints the node's own MAC beside the last
+sender's, marked `<-- ITSELF` if they ever match. Over two clean runs they never did.

@@ -3,6 +3,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 
+#include <cstdio>
 #include <cstring>
 
 EspNowLink::Slot EspNowLink::s_ring[EspNowLink::kSlots];
@@ -10,6 +11,7 @@ volatile uint32_t EspNowLink::s_head = 0;
 volatile uint32_t EspNowLink::s_tail = 0;
 volatile uint32_t EspNowLink::s_overruns = 0;
 volatile uint32_t EspNowLink::s_received = 0;
+volatile uint8_t EspNowLink::s_lastPeer[6] = {0};
 
 namespace {
 // The broadcast address. Every cube in earshot hears every packet; which ones it acts on is the
@@ -18,7 +20,8 @@ const uint8_t kBroadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 }  // namespace
 
 void EspNowLink::onRecv(const uint8_t* mac, const uint8_t* data, int len) {
-  (void)mac;
+  if (mac)
+    for (int i = 0; i < 6; ++i) s_lastPeer[i] = mac[i];
   if (len <= 0 || len > (int)partsim::kSpillMaxPayload) return;
   const uint32_t head = s_head;
   const uint32_t next = (head + 1) % kSlots;
@@ -51,9 +54,33 @@ bool EspNowLink::begin() {
 
 bool EspNowLink::send(const uint8_t* data, int len) {
   if (!ready_ || len <= 0 || len > (int)partsim::kSpillMaxPayload) return false;
-  if (esp_now_send(kBroadcast, data, (size_t)len) != ESP_OK) return false;
+  const esp_err_t e = esp_now_send(kBroadcast, data, (size_t)len);
+  if (e != ESP_OK) {
+    // COUNTED, because the first hardware run refused 14 of 39 packets during a fast pour and the
+    // only evidence was a particle count that did not add up at the far end.
+    ++failed_;
+    lastErr_ = (int)e;
+    return false;
+  }
   ++sent_;
   return true;
+}
+
+const char* EspNowLink::diagnostic() const {
+  uint8_t self[6] = {0};
+  esp_wifi_get_mac(WIFI_IF_STA, self);
+  uint8_t peer[6];
+  for (int i = 0; i < 6; ++i) peer[i] = s_lastPeer[i];
+  bool heardSelf = true;
+  for (int i = 0; i < 6; ++i)
+    if (peer[i] != self[i]) heardSelf = false;
+  std::snprintf(diag_, sizeof diag_,
+                "radio: refused %u (last err 0x%x), ring overruns %u, self %02x%02x%02x%02x%02x%02x"
+                ", last peer %02x%02x%02x%02x%02x%02x%s",
+                (unsigned)failed_, (unsigned)lastErr_, (unsigned)s_overruns, self[0], self[1],
+                self[2], self[3], self[4], self[5], peer[0], peer[1], peer[2], peer[3], peer[4],
+                peer[5], heardSelf ? "  <-- ITSELF" : "");
+  return diag_;
 }
 
 int EspNowLink::poll(uint8_t* out, int cap) {

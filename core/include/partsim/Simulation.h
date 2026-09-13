@@ -86,6 +86,19 @@ class Simulation {
   // comes back. Callers must count a false the way SpillQueue counts a drop.
   bool injectSpill(const SpillParticle& s);
 
+#if PARTSIM_ENABLE_CHROMA
+  // The dye this beaker is filled WITH, as opposed to the dye any given particle currently
+  // carries. Two different things: a chained beaker starts red and ends up pink, and a refill
+  // after that must put red back in rather than pink -- the cube's identity is the dye it was
+  // configured with, not the average of what is in it.
+  //
+  // Applies to every particle now and to every one spawned or filled later. An ARRIVAL keeps its
+  // own dye, which is the entire point of a chain.
+  void setDye(uint16_t r, uint16_t g);
+  uint16_t dyeR() const { return dyeR_; }
+  uint16_t dyeG() const { return dyeG_; }
+#endif
+
   // World-space down, rotated into object space by the object's orientation.
   void setOrientation(Quat q);
   // Directly set object-space gravity (used by tests and the golden sequence).
@@ -215,6 +228,14 @@ class Simulation {
   int panelRes_ = kPanelRes;
 
   SpillQueue spill_;
+#if PARTSIM_ENABLE_CHROMA
+  uint16_t dyeR_ = 0, dyeG_ = 0;  // 0,0 is blue -- what every particle has always been
+  // Every path that creates a particle goes through add(), which zeroes the dye. This puts the
+  // beaker's own dye on the one just created, and is called from both spawn paths rather than
+  // from add() itself, because an ARRIVAL also goes through add() and must keep the dye it
+  // brought with it.
+  void tintLast();
+#endif
 
   Emitter emitters_[kMaxEmitters];
   int emitterCount_ = 0;

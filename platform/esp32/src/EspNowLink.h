@@ -2,6 +2,7 @@
 #include <cstdint>
 
 #include "partsim/Spill.h"
+#include "partsim/SpillChain.h"
 
 // The chain between cubes: ESP-NOW carrying spill packets from one beaker's open top to the next.
 //
@@ -12,7 +13,7 @@
 //
 // Receive happens in a WiFi task callback, so it may NOT touch the simulation: everything it does
 // is copy the bytes into a ring and return. Draining is the caller's job, on its own thread.
-class EspNowLink {
+class EspNowLink final : public partsim::SpillTransport {
  public:
   bool begin();
   bool ready() const { return ready_; }
@@ -20,10 +21,16 @@ class EspNowLink {
   // Fire and forget. ESP-NOW is unacknowledged here by choice -- a spill packet is worth less than
   // the latency of retrying it, and the receiver's cumulative-count arithmetic makes up whatever
   // is lost (partsim::SpillReceiver). Returns false only if the radio refused the send outright.
-  bool send(const uint8_t* data, int len);
+  bool send(const uint8_t* data, int len) override;
 
   // Copies out one packet, oldest first. Returns its length, or 0 if the ring is empty.
-  int poll(uint8_t* out, int cap);
+  int poll(uint8_t* out, int cap) override;
+
+  const char* name() const override { return "esp-now"; }
+
+  // Sends the radio REFUSED, the last error it gave, and the MAC the last packet came from --
+  // which is the only way to tell a peer's packet from one's own broadcast coming back.
+  const char* diagnostic() const override;
 
   uint32_t sent() const { return sent_; }
   uint32_t received() const { return received_; }
@@ -41,9 +48,15 @@ class EspNowLink {
   };
   static Slot s_ring[kSlots];
   static volatile uint32_t s_head, s_tail, s_overruns, s_received;
+  // Written by the WiFi task, read by the console. Six bytes of identity, not state: a torn read
+  // misnames a peer for one line and nothing acts on it.
+  static volatile uint8_t s_lastPeer[6];
+  mutable char diag_[128];
 
   bool ready_ = false;
   uint32_t sent_ = 0;
+  uint32_t failed_ = 0;
+  int lastErr_ = 0;
   uint32_t received_ = 0;
   uint32_t overruns_ = 0;
 };

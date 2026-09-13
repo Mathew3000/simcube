@@ -173,7 +173,27 @@ void Simulation::spawnOne(uint8_t material) {
                       b.hi.y - m - rng_.nextFloat() * m,
                       b.lo.z + m + rng_.nextFloat() * (s.z - 2.0f * m)},
                  Vec3{0.0f, 0.0f, 0.0f}, material);
+#if PARTSIM_ENABLE_CHROMA
+  tintLast();
+#endif
 }
+
+#if PARTSIM_ENABLE_CHROMA
+void Simulation::tintLast() {
+  if (particles_.n <= 0) return;
+  particles_.cr[particles_.n - 1] = dyeR_;
+  particles_.cg[particles_.n - 1] = dyeG_;
+}
+
+void Simulation::setDye(uint16_t r, uint16_t g) {
+  dyeR_ = r;
+  dyeG_ = g;
+  for (int i = 0; i < particles_.n; ++i) {
+    particles_.cr[i] = r;
+    particles_.cg[i] = g;
+  }
+}
+#endif
 
 void Simulation::advanceTransition(float dt) {
   if (fade_ < 1.0f) {
@@ -224,11 +244,15 @@ int Simulation::fill(int count, uint8_t material, uint32_t seed) {
   // metastable configuration and hides whether the solver actually holds together.
   for (int layer = 0; particles_.n < count && layer < 256; ++layer)
     for (int iz = 0; iz < nz && particles_.n < count; ++iz)
-      for (int ix = 0; ix < nx && particles_.n < count; ++ix)
+      for (int ix = 0; ix < nx && particles_.n < count; ++ix) {
         particles_.add(Vec3{b.lo.x + (0.5f + (float)ix) * d + r.nextSigned() * 0.1f * d,
                             b.lo.y + (0.5f + (float)layer) * d + r.nextSigned() * 0.1f * d,
                             b.lo.z + (0.5f + (float)iz) * d + r.nextSigned() * 0.1f * d},
                        Vec3{0.0f, 0.0f, 0.0f}, material);
+#if PARTSIM_ENABLE_CHROMA
+        tintLast();
+#endif
+      }
   return particles_.n;
 }
 

@@ -16,6 +16,7 @@ add_library(partsim_core STATIC
   src/RenderState.cpp
   src/SimFrame.cpp
   src/SpillFrame.cpp
+  src/SpillChain.cpp
   src/Font3x5.cpp
   src/BeakerOverlay.cpp
 )
