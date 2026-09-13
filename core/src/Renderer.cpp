@@ -442,18 +442,15 @@ void Renderer::splatField(HeatView f, const Geometry& g) {
 
 #if PARTSIM_ENABLE_INK
 void Renderer::splatInk(const InkField& f, const Geometry& g) { splatInk(f.view(), g); }
+void Renderer::splatInk(const InkField& f, const Geometry& g, uint32_t serial, int phaseQ8) {
+  splatInk(f.view(), g, serial, phaseQ8);
+}
 
-void Renderer::splatInk(InkView f, const Geometry& g) {
-  if (f.empty) return;  // a clear volume costs one branch
-  const int n = f.dim.x;
-  // The intermediate is one texel per field cell, which is what makes the column walk a direct
-  // index rather than a trilinear sample. A field that is not cubic would need the general path.
-  if (n != kInkDim || f.dim.y != kInkDim || f.dim.z != kInkDim) return;
-
-  for (int s = 0; s < renderCount_; ++s) {
+// One face's 16x16 projection. Split out because it now runs at the FIELD rate rather than the
+// display rate -- see splatInk below.
+void Renderer::projectInkFace(InkView f, int s, uint8_t* out) {
+  {
     const InkColumns& c = inkCols_[s];
-    if (!c.valid) continue;
-    const Panel& pan = g.at(panelOf_[s]);
 
     // --- one column per intermediate texel, composited front to back -------------------------
     for (int iv = 0; iv < kInkDim; ++iv) {
@@ -516,12 +513,81 @@ void Renderer::splatInk(InkView f, const Geometry& g) {
           cb = imin(255, (cb * rcp) >> 8);
         }
 
-        uint8_t* o = &inkFace_[(iv * kInkDim + iu) * 4];
+        uint8_t* o = &out[(iv * kInkDim + iu) * 4];
         o[0] = (uint8_t)iclamp(255 - trans, 0, 255);
         o[1] = (uint8_t)cr;
         o[2] = (uint8_t)cg;
         o[3] = (uint8_t)cb;
       }
+    }
+
+  }
+}
+
+// Non-interpolating form: every call is its own field state, shown in full.
+//
+// It must NOT increment inkSerial_, which is the "last field I projected" marker the interpolating
+// path compares against -- incrementing it here made the argument equal to the member, so the
+// comparison never fired and the projection was never computed at all.
+void Renderer::splatInk(InkView f, const Geometry& g) { splatInk(f, g, ++inkAutoSerial_, 256); }
+
+// Project at the field rate, upscale at the display rate, and cross-fade between the two most
+// recent projections.
+//
+// The field runs at 20 Hz and the browser draws at 60, so without this the image changes on
+// exactly every third frame and holds still for the other two: measured at ~880 texels jumping at
+// once, which is a 20 Hz strobe across the whole plume rather than motion. Section 2.3 of the
+// design document calls for interpolating the PROJECTIONS rather than the 3D state, and that is
+// what this does -- two 16x16 images per face, not two copies of the volume.
+//
+// It is also cheaper than what it replaces. The column walk used to run every frame against a
+// field that had not changed; now it runs only when the field actually steps.
+//
+// `phaseQ8` is 0..256 across the interval between field steps. The picture therefore lags the
+// simulation by one field step, which at 20 Hz is 50 ms and is the standard cost of interpolating
+// rather than extrapolating.
+void Renderer::splatInk(InkView f, const Geometry& g, uint32_t serial, int phaseQ8) {
+  const int n = f.dim.x;
+  // The intermediate is one texel per field cell, which is what makes the column walk a direct
+  // index rather than a trilinear sample. A field that is not cubic would need the general path.
+  if (n != kInkDim || f.dim.y != kInkDim || f.dim.z != kInkDim) return;
+
+  if (f.empty) {
+    // Snap rather than fade: a cleared volume should go dark at once, and holding a ghost of it
+    // for 50 ms reads as the clear having failed.
+    if (serial != inkSerial_) {
+      for (int s = 0; s < renderCount_; ++s) {
+        for (int i = 0; i < kInkDim * kInkDim * 4; ++i) { inkProj_[s][i] = 0; inkPrev_[s][i] = 0; }
+      }
+      inkSerial_ = serial;
+    }
+    return;
+  }
+
+  if (serial != inkSerial_) {
+    for (int s = 0; s < renderCount_; ++s) {
+      if (!inkCols_[s].valid) continue;
+      for (int i = 0; i < kInkDim * kInkDim * 4; ++i) inkPrev_[s][i] = inkProj_[s][i];
+      projectInkFace(f, s, inkProj_[s]);
+      // First field the renderer has ever seen: there is no earlier projection to come from, and
+      // fading up out of the previous buffer's stale contents would be worse than not fading.
+      if (!inkPrimed_)
+        for (int i = 0; i < kInkDim * kInkDim * 4; ++i) inkPrev_[s][i] = inkProj_[s][i];
+    }
+    inkPrimed_ = true;
+    inkSerial_ = serial;
+  }
+
+  const int t = iclamp(phaseQ8, 0, 256);
+  for (int s = 0; s < renderCount_; ++s) {
+    if (!inkCols_[s].valid) continue;
+    const Panel& pan = g.at(panelOf_[s]);
+
+    // Blend the two projections once, over 256 intermediate texels, rather than during the
+    // upscale where it would cost four more reads per PANEL texel.
+    for (int i = 0; i < kInkDim * kInkDim * 4; ++i) {
+      const int a = inkPrev_[s][i], b = inkProj_[s][i];
+      inkFace_[i] = (uint8_t)(a + (((b - a) * t) >> 8));
     }
 
     // --- bilinear upscale into the accumulators ----------------------------------------------

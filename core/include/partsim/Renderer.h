@@ -114,7 +114,11 @@ class Renderer {
   // so resolve(), the palette, the quantisation and the blit are all unchanged.
 #if PARTSIM_ENABLE_INK
   void splatInk(InkView f, const Geometry& g);
+  // Interpolating form: `serial` changes when the field steps, `phaseQ8` is 0..256 across the
+  // interval between steps. See the implementation for why the projections rather than the field.
+  void splatInk(InkView f, const Geometry& g, uint32_t serial, int phaseQ8);
   void splatInk(const InkField& f, const Geometry& g);
+  void splatInk(const InkField& f, const Geometry& g, uint32_t serial, int phaseQ8);
 #endif
 
   // Convenience overloads for callers holding the full types. Thin adapters, not a second path.
@@ -240,7 +244,15 @@ class Renderer {
   uint16_t inkRecip_[kInkSumMax + 1];
   // One face's intermediate image: opacity, r, g, b. Reused across faces, so this is 1 KB total
   // rather than one per driven panel.
+  // The two most recent projections per face, plus the blend of them that actually gets upscaled.
+  // 1 KB each: two per driven face is the whole cost of not strobing at the field rate.
+  uint8_t inkProj_[kMaxRenderPanels][kInkDim * kInkDim * 4];
+  uint8_t inkPrev_[kMaxRenderPanels][kInkDim * kInkDim * 4];
   uint8_t inkFace_[kInkDim * kInkDim * 4];
+  uint32_t inkSerial_ = 0u;       // last field state projected
+  uint32_t inkAutoSerial_ = 0u;  // counter for the non-interpolating overload, kept separate
+  bool inkPrimed_ = false;
+  void projectInkFace(InkView f, int slot, uint8_t* out);
 #endif
 #if PARTSIM_ENABLE_CHROMA
   // Kernel-LUT index at the chroma radius: a texel is inside the narrow disc when its kq is below
