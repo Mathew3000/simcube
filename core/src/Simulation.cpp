@@ -359,7 +359,6 @@ void Simulation::fixedStep(float dt) {
   const float inkPeriod = 1.0f / (float)kInkHz;
   while (inkAccum_ >= inkPeriod) {
     ink_.step(gravity_, jerk_, kInkStepMs);
-    ++inkSerial_;
     inkAccum_ -= inkPeriod;
   }
 #endif

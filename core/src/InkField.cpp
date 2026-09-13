@@ -66,6 +66,7 @@ void InkField::clear() {
   cur_ = 0;
   phase_ = 0;
   peak_ = 0;
+  ++rev_;
   loX_ = loY_ = loZ_ = 0;
   hiX_ = hiY_ = hiZ_ = -1;  // empty
   for (int i = 0; i < kMaxVortons; ++i) vort_[i].life = 0;
@@ -123,6 +124,7 @@ void InkField::inject(Vec3 objectPos, float radius, int channel, uint8_t amount)
     }
   }
   rebuildBounds();
+  ++rev_;
 }
 
 void InkField::spawnVortonPair(Vec3 objectPos, Vec3 axisObject, float radius, int strength,
@@ -332,6 +334,7 @@ void InkField::step(Vec3 gravityObject, Vec3 containerAccel, int dtMillis) {
 
   cur_ = nxt;
   peak_ = peak;
+  ++rev_;
   loX_ = nlo[0]; loY_ = nlo[1]; loZ_ = nlo[2];
   hiX_ = nhi[0]; hiY_ = nhi[1]; hiZ_ = nhi[2];
 

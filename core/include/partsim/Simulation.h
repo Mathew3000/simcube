@@ -155,7 +155,7 @@ class Simulation {
     // no-heat stand-in, and both expose view().
     renderer_.accumulate(particles_.view(), field_.view(), geometry_);
 #if PARTSIM_ENABLE_INK
-    renderer_.splatInk(ink_, geometry_, inkSerial_, inkPhaseQ8());
+    renderer_.splatInk(ink_, geometry_, ink_.revision(), inkPhaseQ8());
 #endif
   }
 
@@ -171,20 +171,20 @@ class Simulation {
     // had been composited and leave the dye out of the picture entirely.
     renderer_.accumulate(particles_.view(), field_.view(), geometry_);
 #if PARTSIM_ENABLE_INK
-    renderer_.splatInk(ink_, geometry_, inkSerial_, inkPhaseQ8());
+    renderer_.splatInk(ink_, geometry_, ink_.revision(), inkPhaseQ8());
 #endif
     renderer_.resolveAll();
   }
 #endif
 
 #if PARTSIM_ENABLE_INK
-  // How far through the interval between field steps this frame is, 0..256. The same unconsumed
-  // time the particle splat uses to extrapolate -- the field interpolates instead, because it has
-  // no per-element velocity to extrapolate along.
-  int inkPhaseQ8() const {
-    if (!interpolate_) return 256;
-    return iclamp((int)(inkAccum_ * (float)kInkHz * 256.0f), 0, 256);
-  }
+  // How far to ease the drawn projection toward the latest one each frame, 0..256.
+  //
+  // A constant, not a function of the accumulator phase. The field has no per-element velocity to
+  // extrapolate along the way particles do, so there is nothing to interpolate BETWEEN except two
+  // snapshots -- and which two depends on how often the caller happens to render. Easing by a
+  // fixed fraction converges in about one field interval at 60 fps and is correct at any cadence.
+  int inkPhaseQ8() const { return interpolate_ ? kInkSmoothQ8 : 256; }
 #endif
 
   void setInterpolate(bool on) { interpolate_ = on; }
@@ -261,9 +261,6 @@ class Simulation {
   // it does not need the 60 Hz the granular contact model does. A float accumulator rather than
   // a step counter, so the cadence is right whatever PARTSIM_FIXED_DT_DEN the tier picks.
   float inkAccum_ = 0.0f;
-  // Bumped every time the field steps, so the renderer can tell a new field from the same one
-  // rendered again and cross-fade between projections instead of strobing at 20 Hz.
-  uint32_t inkSerial_ = 0u;
 #endif
   Renderer renderer_;
   float scratch_[kMaxParticles];

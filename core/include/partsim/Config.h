@@ -547,6 +547,10 @@ constexpr int kMaxVortons = PARTSIM_MAX_VORTONS;
 // Field updates per second. Twenty, against the solver's sixty: section 2.3 of the design
 // document, and the rate every cost figure in section 13 is quoted at.
 constexpr int kInkHz = 20;
+// How far the drawn projection moves toward the latest one per displayed frame, /256. At 60 fps
+// this converges within about one 20 Hz field interval, which is what turns a three-frame hold
+// followed by a jump into continuous motion.
+constexpr int kInkSmoothQ8 = 96;
 constexpr int kInkStepMs = 1000 / kInkHz;
 
 constexpr int kInkFracBits = 8;

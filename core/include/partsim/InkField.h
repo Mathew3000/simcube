@@ -79,6 +79,13 @@ class InkField {
 
   int vortonCount() const;
 
+  // Bumped whenever the DYE changes -- stepped, injected into, or cleared. The renderer caches a
+  // projection of the field and cross-fades between two of them, so it needs to know when the
+  // thing it projected is no longer what it holds. Keyed on the dye rather than on the step count
+  // because injecting without stepping changes the picture just as much, and a renderer told only
+  // about steps would go on showing the dye that was there before the pour.
+  uint32_t revision() const { return rev_; }
+
   // Read-only view for the renderer, so the projection is identical whether the dye was advected
   // here or arrived over a wire. Defined in RenderState.cpp, as FieldGrid::view() is.
   struct InkView view() const;
@@ -113,6 +120,7 @@ class InkField {
   int loX_ = 0, loY_ = 0, loZ_ = 0;
   int hiX_ = -1, hiY_ = -1, hiZ_ = -1;  // empty box
   uint8_t peak_ = 0;
+  uint32_t rev_ = 1;  // 1, not 0: a freshly built renderer holds 0 and must see a difference
   bool forceFull_ = false;
 };
 
