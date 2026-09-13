@@ -543,7 +543,93 @@ on a node with 230 KB to spend.
 
 ---
 
-## 11. Source map
+## 11. Beaker mode and the chain
+
+A second mode, not a second simulation. The cube becomes an open-topped vessel: tilt it and the
+liquid pours out of the top face, and what leaves one cube arrives in the next. Every line of it is
+inert unless a face has been opened, which is what keeps the shipping tiers bit-identical to what
+they were.
+
+### The open face
+
+`SimVolume` holds a container AABB and, since M4-B, an optional open face. `clampInto` clamps a
+predicted position into the box **except** on that axis, and it replaced a free `clampToBox`
+function precisely so that a caller cannot reach the raw box and silently re-close the hole.
+
+There were **four** such callers, not the three the obvious search finds — the correction pass, the
+friction pass, the predict step, and `wallDensityAt`. That last one is the interesting one. §2's
+wall term gives a particle back the density the wall displaces; with a face **open** there is no
+wall there and nothing is displaced, so compensating invents half a rest density of neighbours
+above every particle at the rim. The solver duly pushes the surface away from the very face the
+liquid is supposed to leave through — worth roughly **2x on the pour rate**, and it pours either
+way, which is why nothing noticed.
+
+### Spilling, and arriving
+
+A particle past the open plane is removed with the O(1) swap-with-last `removeAt` and pushed onto a
+`SpillQueue`: a fixed array, a count, and two cumulative counters that are never reset. Dropping on
+overflow is deliberate and **counted**, because in a closed ring a lost particle is volume that
+never comes back and the symptom — beakers slowly emptying over minutes — reads as a physics leak.
+
+The queue is cleared at the top of `stepFixed()` and of `advance()`, so it always holds exactly
+what crossed during the step, or the frame, just run. A single cube reads nothing, and that clear
+**is** the "spills and does not come back" behaviour rather than something a caller must remember.
+
+An arrival enters one rest spacing inside the rim, at the horizontal position it left, moving
+inward at the speed it left with. Object space on both sides: every cube is the same 32-unit box,
+so a stream leaving one corner arrives in the corresponding corner, which is what makes a chain
+read as pouring rather than as teleporting.
+
+A vessel with a hole in it also has **no population target**. Left running, the scene machinery
+sees a draining beaker as a transition in progress and tops it up from the top at 32 particles a
+step, so the count never falls at all.
+
+### The wire format
+
+16 bytes of header — magic, version, the sender's chain position, a sequence number, the sender's
+cumulative spill count, a count and a Fletcher-16 — then 13 bytes per particle: position as three
+`uint16` across the container box, velocity as three `int8`, dye as two `uint16`. Quantised exactly
+the way `SimFrame` does it, because the two formats face the same problem and a second convention
+would be a second thing to get wrong. **18 particles fit** ESP-NOW's 250-byte limit.
+
+The dye fields stay in the format even in a build with chroma compiled out, so a mixed chain does
+not silently misread every packet from the other side.
+
+### The pump, and the two ways a chain loses volume
+
+`SpillChain` is the piece between the queue and the carrier, and it is in `core/` — the carrier
+interface with it — because it is portable, the tests link only core, and it is where the
+interesting mistakes live. The device, the browser and the tests all run this same code.
+
+**Loss one: the air.** A dropped radio packet is invisible by construction, so the header carries
+the sender's cumulative count. A receiver that has taken fewer particles than the sender has ever
+released knows the difference exactly, and re-creates the missing ones from the last arrival —
+same stream, so the best available guess at colour and trajectory. Made-up particles are spread
+across a lattice in the plane of the open face and never land on the template, because PBF's
+density gradient between two particles at identical positions is **zero**: exact copies would
+never push apart and would sit there as one permanent lump.
+
+**Loss two: the caller.** `advance()` clears the queue once per frame and `stepFixed()` once per
+step. A pump at the wrong cadence sends a fraction of the pour — and the far end still looks
+right, because the make-up mechanism replaces the rest with clones. `Stats::unsent` names it: every
+particle spilled is in a packet, refused by the queue, or was never offered to the pump, and the
+sender can do that arithmetic alone.
+
+And a third thing that is not loss at all: a full beaker cannot receive. A ring conserves volume
+only if each vessel holds its own fill **plus** what is in flight toward it, and in a chain every
+beaker starts full at once — so a beaker fills to 60% of its pool.
+
+### Addressing
+
+The radio broadcasts, so every cube hears every packet. With two cubes that is harmless; with three
+it is a leak running the other way — each cube injects what **both** others poured and the ring
+gains volume out of nothing (150 particles became 200, measured). A cube therefore takes packets
+only from its upstream neighbour, and the sender's position rides in the header byte that was
+previously written as zero and documented as reserved.
+
+---
+
+## 12. Source map
 
 ```
 core/                        portable, no platform headers, no libm transcendentals
@@ -562,6 +648,13 @@ core/                        portable, no platform headers, no libm transcendent
   Simulation.{h,cpp}         the façade: owns everything, fixed-step loop, transitions
   RenderState.{h,cpp}        the draw/run seam for display nodes
   SimFrame.{h,cpp}           wire format
+  Spill.h                    what leaves an open face, the queue, the spill wire format
+  SpillFrame.cpp             encode/decode, Fletcher-16, quantisation
+  SpillChain.{h,cpp}         the pump: queue -> packets -> carrier -> injection, and the carrier
+                             interface the radio and the browser implement
+  BeakerOverlay.{h,cpp}      vessel edge lines and the orientation gate, composited through resolve
+  Font3x5.cpp                45 glyphs, for the gate
+  Parallel.h                 how the solver reaches a second core without core/ knowing what one is
   ChainMap.{h,cpp}           face -> HUB75 chain position, with rotation and mirroring
 
 platform/app/                App.{h,cpp} -- the firmware minus the hardware and the scheduler
@@ -570,8 +663,9 @@ platform/host/               golden.cpp, bench.cpp, ppm_dump.cpp, memreport.cpp,
                              console_main.cpp -- platform/app on a second platform
 platform/wasm/               bindings.cpp + web/ (three.js cube, multi-node preview)
 platform/esp32/              main.cpp (bring-up + scheduling), Pins.h, RoleStraps.{h,cpp},
-                             PanelDriver, Lsm6dsox, SpiFrameLink, platformio.ini
-tests/                       153 cases; 7 ctest entries by default, 8 with the opt-in QEMU check
+                             PanelDriver, Lsm6dsox, SpiFrameLink, EspNowLink, CoreParallel,
+                             platformio.ini
+tests/                       193 cases; 7 ctest entries by default, 8 with the opt-in QEMU check
 scripts/                     build, budget, determinism and QEMU checks
 ```
 
@@ -582,7 +676,7 @@ fixed), and the palette crossfade.
 
 ---
 
-## 12. Where the time actually goes
+## 13. Where the time actually goes
 
 Measured on an ESP32-S3 devkit at 240 MHz, current configuration. See `RESOURCES.md` §5.1 for the
 QEMU conversion factors and the full derivation.

@@ -165,7 +165,7 @@ and timer tasks ≈ **20 KB** total. Counted separately from the pools above.
 | SPI2 (host) | to display nodes, 20 MHz, DMA, 3 CS |
 | I2C0 | LSM6DSOX + charger + pack AFE on one bus |
 | USB-Serial-JTAG | console and flashing |
-| WiFi (ESP-NOW only) | beaker chaining. **~55 KB of internal heap** — the master's 117 KB spare is what pays for it |
+| WiFi (ESP-NOW only) | beaker chaining. **30.4 KB of internal heap, measured** — not the ~55 KB earlier plans assumed. A `beaker-chain` board reports 127.5 KB of internal heap still free with the radio up and a beaker running |
 | GDMA | SPI2 TX only |
 | LCD_CAM | unused |
 
@@ -528,5 +528,9 @@ follow it -- left absolute, coarser particles stop overlapping and the fluid rea
 
    The rejected pair are rejected **for a build that ships sand**. Beaker mode is liquid-only, so
    `PARTSIM_FIXED_DT_DEN=30` is worth 2.08x there and is left one flag away.
-6. **Whether the master's 117 KB spare survives ESP-NOW.** ~55 KB is an estimate, and it is the
-   headroom the radio was justified against.
+6. ~~**Whether the master's 117 KB spare survives ESP-NOW.**~~ **MEASURED — 30.4 KB**, not the
+   ~55 KB the radio was justified against (`53fc3d4`). A `beaker-chain` board — the beaker tier
+   plus the radio — links at 207.0 KB of static RAM and reports **127.5 KB of internal heap free**
+   after init with a beaker running and ESP-NOW up. The radio is comfortably affordable, and the
+   30.4 KB is why it is still a separate environment rather than part of the tier: a beaker that
+   spills into nothing has no use for it.

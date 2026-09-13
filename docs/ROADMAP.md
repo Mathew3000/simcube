@@ -214,7 +214,10 @@ Full measurements, including the variants tried and rejected, in the commit mess
 
 ## Out of scope
 
-- **Beaker mode itself** (Milestone 4) — ~1–2 weeks, independent of this work.
+- **Beaker mode itself** (Milestone 4) — independent of this work, and since done except for the
+  browser: chroma and mixing, the overlay and orientation gate, the open face and spill, and
+  chaining over ESP-NOW have all landed and been measured on hardware. See
+  [`M4-PLAN.md`](M4-PLAN.md).
 - **A HUB75 driver for a non-ESP MCU** — see W3.
 - **Parallelising the solver's Gauss-Seidel passes** — the eight-colour scheme was built, measured
   and rejected (`DECISIONS.md` P2). The hazard-free passes are parallel (D44).
