@@ -21,16 +21,30 @@ fi
 # identical, so a WASM build from before the refactor passes the comparison while the browser runs
 # code that no longer exists in the tree. That happened: an artifact 18 days behind core sailed
 # through this check.
-ART="$ROOT/platform/wasm/web/public/partsim.wasm"
-NEWER="$(find "$ROOT/core" "$ROOT/platform/wasm/bindings.cpp" -type f \
-         \( -name '*.cpp' -o -name '*.h' \) -newer "$ART" -print 2>/dev/null)"
-if [ -n "$NEWER" ]; then
+#
+# BOTH artifacts are checked. partsim_beaker.wasm is built from the same core/ and the same
+# bindings.cpp at a different tier, and nothing else in the tree looks at it at all -- no
+# determinism comparison, no golden. A guard watching only the default artifact would leave the
+# beaker page free to run code 18 days behind core with nothing saying so, which is the exact
+# failure this check was written for. Absent (nobody has built it) is fine; stale is not.
+stale() {
+  local art="$1" rebuild="$2"
+  [ -f "$art" ] || return 0
+  local newer
+  newer="$(find "$ROOT/core" "$ROOT/platform/wasm/bindings.cpp" -type f \
+           \( -name '*.cpp' -o -name '*.h' \) -newer "$art" -print 2>/dev/null)"
+  [ -n "$newer" ] || return 0
   echo "FAIL: the WASM artifact is older than sources it was built from."
-  echo "  newer than $ART:"
-  printf '    %s\n' $NEWER | sed "s|$ROOT/||"
+  echo "  newer than $art:"
+  printf '    %s\n' $newer | sed "s|$ROOT/||"
   echo "  The hash comparison below would still pass -- it cannot see a stale binary."
-  echo "  Rebuild:  scripts/build_wasm.sh"
-  exit 1
-fi
+  echo "  Rebuild:  $rebuild"
+  return 1
+}
+
+rc=0
+stale "$ROOT/platform/wasm/web/public/partsim.wasm" "scripts/build_wasm.sh" || rc=1
+stale "$ROOT/platform/wasm/web/public/partsim_beaker.wasm" "scripts/build_wasm.sh --beaker" || rc=1
+[ "$rc" -eq 0 ] || exit 1
 
 exec node "$ROOT/scripts/check_determinism.mjs"

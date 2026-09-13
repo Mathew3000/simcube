@@ -1301,3 +1301,177 @@ remaining 205 particles and its count did not move.
 
 Console command `n <id> <len>`. It does not survive a reboot — chain order and per-cube colour as
 persistent configuration belong with M4-E, which is where the configuration surface is.
+
+### D67. The beaker page gets its own artifact, and the tier arrives as a compiler flag **[MEASURED]**
+
+`PARTSIM_ENABLE_CHROMA` changes `kChannelCount` from 1 to 4 and moves the pixel golden, so the
+browser needs two artifacts: `public/partsim.wasm` as it was, which `check_determinism.mjs` guards,
+and `public/partsim_beaker.wasm` at the beaker tier, which only `beakers.html` loads.
+
+The brief gave the command as `scripts/build_wasm.sh -DPARTSIM_ENABLE_CHROMA=1`. **That silently
+builds a chroma-free artifact.** `core/CMakeLists.txt` forwards six cache variables to the compiler
+— the `PARTSIM_MAX_*` capacities and `PARTSIM_INTERNAL_PIXELS` — and `PARTSIM_ENABLE_CHROMA` is not
+one of them, so the `-D` sets a CMake entry nothing reads and `Config.h` falls through to `0`. A
+tier is a compiler flag (`-DCMAKE_CXX_FLAGS=-DPARTSIM_TIER_BEAKER=1`), which is how `build-beaker/`
+was already configured.
+
+The failure looks exactly like the bug the page exists to find — a ring of identical blue cubes
+reads as dye that will not diffuse — so it is now `scripts/build_wasm.sh --beaker`, a flag rather
+than a `-D` the caller has to get right, and `beakers.html` calls `ps_beaker_has_chroma()` and
+refuses to run without it, naming the command.
+
+Its own build directory (`build-wasm-beaker`), because two configurations in one directory keeps
+objects whose sources did not change and links tier-2.5 structs against tier-3.0 ones. Its own
+`OUTPUT_NAME` via `PARTSIM_WASM_NAME`, because emscripten bakes the `.wasm` filename into the
+`.mjs` and renaming on copy breaks it.
+
+`check_wasm.sh` now watches **both** artifacts. Nothing else in the tree looks at the beaker one —
+no determinism comparison, no golden — so a guard on the default alone would have left it free to
+run code arbitrarily far behind `core/`, which is the exact failure that guard was written for.
+Verified by backdating it: the check fails and names `scripts/build_wasm.sh --beaker`.
+
+### D68. 60% of the pool is not 60% of anything on a host build **[MEASURED]**
+
+D63 says a beaker fills to `(kMaxParticles * 3) / 5`. That is 60% of the **pool**, and it produces
+60% only where the pool is the binding constraint. On the device the pool is 512 against a larger
+volume capacity, so a beaker comes up at 307 — correct, and the reason D63 reads as settled.
+
+In a host or WASM build the pool is 16384, the rule asks for 9830, and `Simulation::init` clamps it
+to `capacity * 9 / 10`: measured capacity 2117 at the beaker tier, **fill 1905, 90% of capacity**.
+That is the condition D63 exists to prevent, arrived at by following D63.
+
+The bindings take the fraction of whichever binds, `min(pool * 3/5, capacity * 3/5)` — 1270 here,
+307 unchanged on the device. The rule survives; its arithmetic did not.
+
+`App.cpp` still has the pool form. It is correct today only because two unrelated numbers happen to
+line up, and a `beaker` tier at a larger pool would inherit the fault. Left alone because
+`platform/app/` was out of scope for M4-E; flagged here so it is not rediscovered on hardware.
+
+### D69. Six beakers fit; the ceiling is seven, and it is a link error **[MEASURED]**
+
+The M4-E brief put the browser's limit at four and said six would not fit, charging each of the
+three display nodes a full `Simulation`. A `DisplayNode` carries `RenderState`'s draw-only
+containers and no solver, which is where the room was.
+
+Measured by building the module at successive counts. Four, five, six and seven all link,
+instantiate and run a conserving ring. Eight fails at link:
+
+```
+wasm-ld: error: initial memory too small, 34740704 bytes needed
+```
+
+against `INITIAL_MEMORY` 33554432 — so a beaker costs 3.41 MB (a chroma `Simulation` is 3.25 MB,
+plus the bindings' packet buffers) and the hard ceiling is seven.
+
+`kMaxBeakers` is six: one beaker of slack, because the failure mode is a **link** error rather than
+a runtime one and there is nothing to degrade into. `ALLOW_MEMORY_GROWTH` stays off regardless —
+growth detaches every panel view JS holds. A six-beaker ring at res 64 conserves (7620 → 7611,
+`unsent` zero) at 32.4 ms/frame of physics; the page defaults to three.
+
+### D70. Fletcher-16 mod 255 cannot see 0x00 become 0xFF, and the shortfall it feeds is unbounded **[MEASURED]**
+
+Two independent defects in the spill wire format, found in the browser and **not fixed** — `core/`
+was out of scope for M4-E and a finding was asked for instead of a patch. Recorded so the next
+person to touch `SpillFrame.cpp` has the measurement.
+
+**The checksum.** `fletcher16` is the textbook mod-255 form, and under mod 255 `0x00 ≡ 0xFF`.
+Exhaustive single-byte substitution against the real `encodeSpill`/`decodeSpill`: 10 of 36 header
+corruptions are accepted, and every one of them is a byte that is **zero in ordinary traffic** — the
+high bytes of `seq` and `totalOut`, and `from` on cube 0. The one zero header byte that is caught,
+`count`'s high byte, is caught by `h.count > kSpillMaxPerPacket`, not by the checksum. This is the
+most likely corruption the format can suffer, not a rare one.
+
+**The shortfall.** `SpillReceiver::note` computes `h.totalOut - seen_` in `uint32_t` with no
+plausibility bound, and `SpillChain::pump` pays the result off at `kSpillMaxPerPacket` a frame
+forever. One byte flipped **once**, at `totalOut` byte 2, on an otherwise clean two-beaker link:
+
+| | fill | bad | shortfall | madeUp |
+|---|---|---|---|---|
+| clean | 2540 → 2313 | 0 | 0 | 0 |
+| one flipped byte | 2540 → 2484 | **0** | **16711680** | 15084 and climbing |
+
+`0xFF0000` exactly. `bad` stays zero, `madeUp` climbs 18 a frame (4284 / 9684 / 15084 at frames
+300 / 600 / 900), and the fill stays plausible because the beaker pours out of its own open top at
+roughly the rate it manufactures clones. Every symptom of a healthy chain, permanently.
+
+The fixes are separate: a checksum that sees the corruption (mod 256, Adler-32, or simply extending
+coverage over the payload) makes it detectable; a bound on `missing` makes it survivable — which is
+needed anyway, because a peer that reboots or is re-addressed hands over a wild cumulative count
+with no corruption involved at all.
+
+**The payload is not covered either.** `fletcher16(in, 14)` is the header alone, and `decodeSpill`
+reads `cr` and `cg` raw. `Particles.h` rests the two-component dye encoding on `cr + cg <=
+kChromaOne`; a packet can break it. Forty arrivals with `cr = cg = 0xFFFF`, against an identical
+clean run: same fill, same physics, dye weight 731.0 → 765.1 — **34 particle-units of dye created
+from nothing**, `bad` zero, and green in a chain with no green in it.
+
+`beakers.html` flags a shortfall larger than the ring's capacity in red and names the cause, because
+that number is the only symptom there is.
+
+### D71. The browser gets a broadcast carrier, because point-to-point cannot reproduce D66 **[MEASURED]**
+
+`beakers.html` delivers packets point-to-point, so — as the brief anticipated — addressing every
+beaker costs nothing and `foreign` would be structurally zero. That is a reason to say so, not a
+reason to stop: the radio is a broadcast, it has no point-to-point option, and the browser is meant
+to be where its behaviour gets debugged.
+
+So the page has both carriers, and D66 is reproducible on it. Three beakers, one tilted, 600 frames:
+
+| carrier | addressing | fill | particlesIn | foreign |
+|---|---|---|---|---|
+| point-to-point | either | 3810 → 3810 | 1007 | 0 |
+| broadcast | unaddressed | **3810 → 10231 (+168.5%)** | **234390** | 0 |
+| broadcast | addressed | 3810 → 3810 | 1007 | 429 |
+
+D66 measured +33% on a short host fixture. Sustained it is **+168.5% and 233× the arrivals**,
+because it compounds: an overfilled beaker pours out of its own open top, that spill is broadcast,
+and every other beaker takes that too. A feedback loop, not a duplication, and it stops only when
+the pools saturate.
+
+Two things the overfill exposed. `rejected` stays **zero** throughout — `injectSpill` fails only
+when the 16384-particle pool is full, and `capacity` (2117) is a solver rest-density figure, not a
+hard cap, so a beaker stuffed to 3540 refuses nothing. And `SpillQueue::dropped` is what actually
+fires (6796 packets' worth), because more than `kMaxSpill` crossed in a single step. The page's fill
+readout turns amber above 90% of capacity for that reason: nothing else on the chain says a beaker
+is overfull.
+
+The ring positions handed to `setChainPosition` are derived by **walking** the order the user
+configured, not by assuming `0→1→2`. The dropdowns can express any permutation, and an addressing
+that ignored them would be addressing a chain nobody asked for. A configuration that is not a single
+closed ring has no positions to derive, so it goes unaddressed and the page says so.
+
+### D72. What the browser's bloom was hiding **[MEASURED]**
+
+`cubeview.js` runs `UnrealBloomPass(0.85, 0.55, 0.12)`, which is right for `index.html` — it makes
+the cube read as LEDs rather than coloured squares. On a pouring beaker it blows the fluid out to
+white, and colour is the entire subject of beaker mode.
+
+It is the bloom, not the resolve: the same frame rendered by `platform/host/spill_ppm` at the same
+tier, which has no bloom pass at all, is saturated red over magenta with no white anywhere in it.
+`beakerview.js` uses `(0.35, 0.4, 0.62)` and the page can turn it off, because the page is a
+measuring instrument as well as a picture and the unbloomed one is what a panel actually resolves
+to.
+
+This is also why both open questions in `M4-PLAN.md` §6 were settled on host renders rather than in
+the browser: the 3D view adds bloom and superimposes the far faces of a translucent box, and neither
+belongs between the question and the pixels.
+
+### D73. Ten colour regions is enough, so beaker mode keeps the shipping spacing **[MEASURED]**
+
+`M4-PLAN.md` §6 left two questions to a render. Both are answered on `spill_ppm` nets at the beaker
+tier — red pouring into blue, 64×64, a steady 115° pour.
+
+**The split kernel reads as colour in the fluid, not floating on it.** The receiving cube shows a
+magenta body with a distinct red layer *above* it — the arriving dye sitting on the blue it has not
+mixed into yet — and a continuous violet gradient between them that follows the shape of the liquid,
+including down the bottom face. Nothing reads as a decal.
+
+**Ten regions reads as mixing.** The identical fixture was rendered twice, chroma on, at d=2.5 (the
+beaker tier, ~13 regions) and at d=3.0 (`cube`, ~10), and the receiving cube's four side faces
+cropped from each. The stratification, the gradient and the converging body are all present at
+d=3.0. It is softer — a blurrier interface, and a visibly beadier falling stream, individual blobs
+rather than a column — but that is sharpness, not legibility.
+
+So the spacing lever survives the colour requirement: **26 fps, not 8.5**. One caveat, stated
+because it bounds the claim: this is a single fixture with two maximally separated hues. Two dyes
+closer together would be a harder test and was not run.

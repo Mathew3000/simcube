@@ -188,14 +188,20 @@ same argument that put `SimFrame` in core for the multi-node preview.
 
 ## 6. Open questions, to settle on a render rather than on paper
 
-- **Does the split kernel read as colour in the fluid, or as colour floating on it?** The risk is
-  chroma looking detached from brightness at the surface.
+- ~~**Does the split kernel read as colour in the fluid, or as colour floating on it?**~~ **Settled
+  by M4-E's render**: in the fluid. The receiving cube shows a magenta body with a distinct red
+  layer above it — the arriving dye on top of the blue it has not mixed into yet — and a continuous
+  violet gradient between them that follows the shape of the liquid, down the bottom face included.
+  Nothing reads as a decal. (`DECISIONS.md` D73.)
 - ~~**Does the top face render the liquid from above, or go dark to read as "open"?**~~ **Settled
   by M4-B's render**: it draws the liquid, and during a pour it is the most informative face on the
   cube.
-- **How coarse can the particles stay?** F3 says colour resolution is `32/d` with the split kernel.
-  At `cube`'s d=3.0 that is ~10 regions. Whether ten reads as mixing is a judgement, and it decides
-  whether beaker mode runs at 8.5 fps or at 26.
+- ~~**How coarse can the particles stay?**~~ **Settled by M4-E's render: ten is enough, so beaker
+  mode keeps `cube`'s d=3.0 and runs at 26 fps rather than 8.5.** The identical fixture rendered at
+  d=2.5 (~13 regions) and d=3.0 (~10) keeps its stratification, its gradient and its converging
+  body at both. d=3.0 is softer — a blurrier interface and a visibly beadier falling stream — but
+  that is sharpness, not legibility. Bounded by the fixture: two maximally separated hues. Two dyes
+  closer together in hue would be a harder test and has not been run. (`DECISIONS.md` D73.)
 
 - **Is a quarter-full beaker at 7 fps acceptable?** Measured since this plan was written
   (`DECISIONS.md` P5): a full 32-unit vessel at `d = 2.5` is **1905 particles**, and the device

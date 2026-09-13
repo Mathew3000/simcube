@@ -11,3 +11,8 @@ out/
 .DS_Store
 platform/wasm/web/public/partsim.mjs
 platform/wasm/web/public/partsim.wasm
+# The beaker-tier artifact, built by scripts/build_wasm.sh --beaker. Ignored for the same reason
+# the default one is: it is build output. check_wasm.sh watches both for staleness, so an absent
+# one is fine and a stale one fails ctest.
+platform/wasm/web/public/partsim_beaker.mjs
+platform/wasm/web/public/partsim_beaker.wasm
