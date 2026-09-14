@@ -1552,3 +1552,175 @@ Xtensa and then on two boards.
 Worth keeping as a reminder of the shape of the bug: every artifact of it looked fine. The HTML is
 valid, the JS is valid, `ctest` covers the module and not the page, and a page that silently does
 nothing looks identical to a page waiting for input.
+
+## 14. The mini cube (WS2812B, plain ESP32)
+
+`MINI.md`'s port to six 8x8 WS2812B matrices on a plain ESP32. No hardware was flashed for this —
+everything below is either measured on the host or measured off a real linked firmware image with
+no board attached; the walk, the orientation mount, the particle sweep and a current-draw reading
+are still owed to whoever has the physical cube (`MINI.md` section 6).
+
+### D77. CPU was never the binding constraint on this board; static RAM is — measured at 288, not the derived ~450 **[MEASURED]**
+
+`MINI.md`'s M1 derives a particle budget from the beaker tier's measured cost-per-particle curve
+and lands near 450 for a full vessel, ~225 for a half-full beaker. That arithmetic is about the
+*solver's* cost and never checks the *chip's* memory — and on a plain ESP32 the memory runs out
+first, by a wide margin.
+
+`PARTSIM_PROFILE_ESP32_MINI` first reused `PARTSIM_DEVICE_MAX_PARTICLES` (512, the S3 number)
+outright, on the reasoning that the topology is unchanged and only the display differs. It links
+firmware whose `.bss`+`.data` overflows `dram0_0_seg` — the classic ESP32's usable static-data
+region before the heap even starts — by 28096 bytes:
+
+```
+xtensa-esp32-elf-ld: region `dram0_0_seg' overflowed by 28096 bytes
+```
+
+That region is 0x2c200-0xdb5c = **124580 bytes**, measured off `platform/esp32mini`'s own linker
+script (`framework-arduinoespressif32/tools/sdk/esp32/ld/memory.ld`) — noticeably smaller than the
+S3's, which is what the inherited 512-particle, 230KB-tier budget assumed. A stock Arduino build
+also costs roughly 48KB of that region in WiFi/BT/lwip static structures **whether or not the radio
+is ever used** (`WiFi.mode(WIFI_OFF)` is a runtime call; the linker still allocates what the
+framework libraries declare), which is not a number this project's other profiles had to account
+for — the S3 build's much larger DRAM absorbs it invisibly.
+
+The dominant per-particle cost is not the particle pool, it is the neighbour cache
+(`PARTSIM_NEIGHBOUR_CACHE`, on by default): `kMaxNeighbours * sizeof(index) * kMaxParticles`, which
+at the inherited cap is `64 * 2 * 512` = 64KB by itself, measured via `partsim_memreport`'s
+`SpatialHash (sort+grid)` line (68108 B at 512 particles, 21164 B at 160, 37932 B at 288 — linear,
+not incidental).
+
+Measured against the real linked image rather than the host-side estimate, 288 particles leaves
+13060 bytes (10.5%) of `dram0_0_seg` free — `RAM: used 111520 bytes` of a 124580-byte region, a
+margin picked to match `check_esp32_budget.sh`'s own ~10% convention rather than the 5.9% a
+320-particle build measured at. `PARTSIM_DEFAULT_MAX_GRID_CELLS` and `_FIELD_CELLS` were cut the
+same way, from the S3's 512/1728 to 96/64 — the mini tier's own `kRestSpacing` of 4.0 needs
+`ceil(32/8)^3` = 64 grid cells, not 512, so the S3 numbers were never buying anything here.
+
+**Consequence for beaker mode**: at 288 particles the pool cannot fill a full 32-unit vessel to the
+~450 the brief derived — D63's 60%-of-pool refill already exists for exactly this shape of problem
+(a full scene not fitting the pool) and degrades gracefully; rendered at the host
+(`partsim_ppm 400 8`), the water-tank scene fills to 158 particles and still reads as a continuous
+waterline across all four side-face seams, not as disconnected blobs. Whether 288 is also the
+CPU-affordable count is `MINI.md`'s `x` sweep to run on real hardware — this decision only settles
+the ceiling memory imposes, which turned out to bind first.
+
+### D78. The orientation pattern is generated from `Geometry`, not a per-face table, and it is host-testable because of it **[STANDS]**
+
+`calibrationTexel()` (`core/include/partsim/Calibration.h`) derives a texel's colour from
+`texelCenter(panel, i, j) - g.bounds(kSlabDepth).center()`'s sign vector, per `MINI.md` M3's own
+argument: a table is six chances to reproduce the mistake the pattern exists to catch, and it would
+need rewriting per panel resolution. Being pure geometry rather than driver state is what makes
+`tests/test_calibration.cpp` possible on the host, with no display attached — one test asserts the
+three faces meeting at each of the cube's eight corners agree, the other applies a synthetic
+90/180/270-degree rotation to a corner texel (the same corner-to-corner mapping
+`ChainMap::map`'s `rotate` uses) and asserts the colour now *disagrees*. A calibration pattern that
+cannot be shown to fail is not a calibration pattern.
+
+### D79. `m` gained a slot-swap form, because `ChainMap::setMount` correctly refuses the one thing a wrong mount most needs **[STANDS]**
+
+`ChainMap::setMount` validates the whole table on every call, so asking it to move face A onto face
+B's slot while B is still there is rejected as a duplicate — correct of `ChainMap`, useless at the
+console, because "these two are in the wrong slot" is the single most likely thing a `t`/walk pass
+finds on a six-face object nobody has wired yet. A two-call swap does not help either: with every
+slot occupied (a full cube always has all six full), the first call collides on the shared slot
+before the second can vacate it.
+
+`ChainMap::setMounts(faceA, a, faceB, b)` sets both in one trial table, validated once. `App`'s `m`
+console command, extended to `m <face> <slot> <rot> <mirror>`, looks up whoever currently holds the
+requested slot and calls this instead of `setMount` when it finds one, then reports both faces. This
+is a `platform/app/` change, shared with the S3 firmware; the HUB75 cube inherits the command for
+free; it can't inherit a use for the swap, since its own mount table was never in question, only the
+gluing.
+
+### D80. Orientation mode was a one-frame flash on every platform, not just this one, until now **[STANDS]**
+
+`App::simStep`'s `showTestPattern_` drew the pattern once and cleared itself, so the very next frame
+(the loop runs at `kTargetFps`, ~33ms later) overwrote it with the fluid. On the HUB75 cube this made
+the existing `t` command effectively invisible — the pattern was never actually looked at for longer
+than one frame before this. `MINI.md` M3 needed it fixed regardless (walking around an object typing
+`m` corrections needs the picture to hold still), so the fix landed in the shared `App`, not behind a
+mini-only flag: `mode_` (`Fluid`/`Orientation`/`Walk`) now stays in `Orientation` until `t` toggles it
+off. Worth a look on the S3 the next time someone runs `t` — this is likely the first time the
+pattern has been visible for more than a frame there either.
+
+### D81. The IMU driver, the ESP-NOW chain and the second core are descoped from this pass, on purpose **[USER]**
+
+Three things `MINI.md` describes and this port does not build, each for a different reason rather
+than one blanket "later":
+
+- **The IMU driver.** No IMU is physically present on the cube yet (`MINI.md` section 2). Wiring
+  `Lsm6dsox` in now would be integrating against a part that isn't there to answer, with no way to
+  tell a wiring mistake from an absent one. `NullMotionSensor` plus a canned deterministic tilt in
+  `App::simStep` (gated on `!plat_.imu->present()`, modelled on
+  `tests/test_beaker_spill.cpp`'s `tiltAt`) satisfies what `MINI.md` actually asks for: "canned
+  motion runs with no IMU; the IMU seam exists and is stubbed behind `MotionSensor::present()`."
+- **The ESP-NOW chain.** `EspNowLink` (`platform/esp32/src/EspNowLink.{h,cpp}`) is ~160 lines of
+  MCU-generic ESP-IDF calls and would port unchanged, but there is no mechanism in this repository
+  for sharing one source file between two independent PlatformIO projects the way `symlink://`
+  shares a whole library — and `platform/esp32/` is explicitly not this port's to restructure to
+  create one. Duplicating it is the only remaining option, and radio code is exactly the kind of
+  thing a second, untested copy quietly drifts from the first. `MINI.md` M7 frames the chain as
+  "worth proving," not a Definition-of-Done line item, and there is no second mini cube to test the
+  receive half against regardless.
+- **`CoreParallel`.** Same file-sharing problem, and this one is pure performance: whether the
+  second core is worth having depends on what the `x` sweep says about the plain ESP32's single-core
+  throughput, which is exactly the number D77 leaves for hardware to answer.
+
+Beaker mode itself needed none of this — it is `core/`'s open face and spill queue plus the mini
+tier's configuration, unchanged code, verified by rendering it (D77).
+
+### D82. The user overrode two of the brief's own scope calls once real hardware was on the desk **[USER]**
+
+`MINI.md`'s "Out of scope" list names "NVS persistence of chain configuration" explicitly, and D81
+above descopes the radio for this pass. Both stood until the cube was actually flashed and the user
+hit the real cost of that: this specific board has no auto-reset circuit, so every firmware update
+meant desoldering/re-jumpering the BOOT pin, and every mount correction meant retyping the same `m`
+commands after each power cycle.
+
+The user's call, once the hardware made the cost concrete: WiFi on, in **AP mode** (the cube hosts
+`partsim-mini`, no router to configure), a small web page for brightness / beaker dye / a
+browser-uploaded OTA flash (`Update.h`'s standard multipart pattern), and the mount table
+auto-saved to NVS (`Preferences`) on every accepted `m`. This does not reopen D81's ESP-NOW
+question — the chain and the AP are unrelated uses of the same radio, and D77 already established
+that the WiFi/BT static footprint is paid for whether or not it is used, so turning it on cost
+nothing further in the DRAM that was the whole finding of D77.
+
+Two small, reusable seams came out of it rather than one-off wiring: `App::submitCommand(const
+char*)`, so the web handlers turn a slider or a colour picker into the exact same command line a
+human would type over serial instead of a second copy of what "brightness" or "dye" means; and
+`ChainMap::setAllMounts()`, the atomic whole-table form `setMount`/`setMounts` couldn't provide —
+restoring an arbitrary saved permutation one face at a time collides on shared slots the same way a
+live two-face swap does, generalised to all six.
+
+### D83. 72 particles at 30 fps, not 288 -- D77 fixed the memory ceiling, not the usable count **[MEASURED]**
+
+D77 measured that the plain ESP32's static RAM caps the particle pool at 288, well under `MINI.md`'s
+derived ~450. The `x` sweep on real hardware, once the cube was flashed, found a second and much
+tighter ceiling: **only 72 particles fit the 30fps/33ms frame budget**, 4x fewer than the pool
+holds.
+
+```
+  count    sim/step   splat   resolve    blit    frame    fps   verdict
+     72       4.88    0.92      0.23    2.45    13.13   76.1   fits
+    144      17.28    1.98      0.27    2.45    38.99   25.6   OVER
+    288      53.54    3.27      0.31    2.45   112.80    8.9   OVER
+```
+
+Cost does not scale linearly with count here either -- quadrupling 72 to 288 particles raised
+`sim/step` 11x, steeper even than the S3's measured n^1.77 (`RESOURCES.md` section 5.1). Read
+together with D77: **memory and CPU are two independent ceilings on this chip, and CPU binds far
+tighter.** The 288-particle pool is not wasted -- it is headroom for whoever decides a lower frame
+rate is an acceptable trade, not a number to expect the display to hit at 30 fps.
+
+A third, unexplained number came out of the same session: the benchmark's own `blit` column reads
+2.45 ms, but a live frame's blit (`r`, during normal operation) reads 12.18-12.61 ms for the
+identical `Display::present()` call -- close to the 11.5 ms hard protocol floor
+(`384 * 24 * 1.25us`), which the benchmark figure is not. Suspected but **not confirmed**: FastLED's
+RMT driver returns once a frame is queued rather than once the wire transmission finishes, so 30
+back-to-back calls in the benchmark's tight loop rarely wait out a prior transmission, while calls
+paced ~33ms apart in a real frame usually do. `RESOURCES.md` section 5.2 has the fuller writeup and
+what would turn this from a plausible explanation into a measured one. The live-frame number
+(12.18-12.61ms) is the one the frame budget above uses; the sweep's 72-particle result would not
+change even if the benchmark's own blit figure is an artifact, because the sweep's verdict is
+already dominated by `sim/step`.

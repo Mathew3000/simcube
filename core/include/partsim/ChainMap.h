@@ -68,6 +68,19 @@ class ChainMap {
   // Returns false if the change would make the table invalid, leaving the old one in place.
   bool setMount(int face, FaceMount m);
 
+  // Sets two faces' mounts in one atomic step. Exists because setMount validates the WHOLE table
+  // on every call: giving face A the slot face B currently holds, one setMount at a time, collides
+  // on that shared slot the instant every slot is occupied -- which on a full six-face cube it
+  // always is. Rejects and leaves both faces unchanged unless the PAIR together is a valid table.
+  bool setMounts(int faceA, FaceMount a, int faceB, FaceMount b);
+
+  // Replaces the WHOLE table in one atomic step, for restoring a table saved earlier (NVS on the
+  // mini cube). One face at a time via setMount/setMounts would hit the same collision problem
+  // those exist to solve, generalised to N faces: a saved table is an arbitrary permutation of a
+  // table that is already a full bijection, so almost every intermediate single-face change would
+  // collide. `count` must match the table this ChainMap was init()'d with.
+  bool setAllMounts(const FaceMount* mounts, int count);
+
   // Renderer texel (i, j) of driven face `face` -> chain pixel. Bounds are the caller's
   // business; this is called per texel in the blit path.
   void map(int face, int i, int j, int& cx, int& cy) const;

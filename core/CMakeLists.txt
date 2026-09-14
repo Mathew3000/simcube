@@ -19,6 +19,7 @@ add_library(partsim_core STATIC
   src/SpillChain.cpp
   src/Font3x5.cpp
   src/BeakerOverlay.cpp
+  src/Calibration.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)
@@ -30,10 +31,12 @@ elseif(PARTSIM_PROFILE STREQUAL "esp32-master")
   target_compile_definitions(partsim_core PUBLIC PARTSIM_PROFILE_ESP32_MASTER=1)
 elseif(PARTSIM_PROFILE STREQUAL "esp32-display")
   target_compile_definitions(partsim_core PUBLIC PARTSIM_PROFILE_ESP32_DISPLAY=1)
+elseif(PARTSIM_PROFILE STREQUAL "esp32-mini")
+  target_compile_definitions(partsim_core PUBLIC PARTSIM_PROFILE_ESP32_MINI=1)
 elseif(NOT PARTSIM_PROFILE STREQUAL "")
   message(FATAL_ERROR
     "Unknown PARTSIM_PROFILE '${PARTSIM_PROFILE}' "
-    "(expected '', 'esp32', 'esp32-master' or 'esp32-display')")
+    "(expected '', 'esp32', 'esp32-master', 'esp32-display' or 'esp32-mini')")
 endif()
 
 # Only forward capacities that were explicitly set, so an unset one falls through to the

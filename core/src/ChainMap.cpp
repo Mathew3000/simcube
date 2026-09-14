@@ -70,6 +70,25 @@ bool ChainMap::setMount(int face, FaceMount m) {
   return true;
 }
 
+bool ChainMap::setMounts(int faceA, FaceMount a, int faceB, FaceMount b) {
+  if (faceA < 0 || faceA >= count_ || faceB < 0 || faceB >= count_ || faceA == faceB) return false;
+  FaceMount trial[kMaxPanels];
+  for (int k = 0; k < count_; ++k) trial[k] = mounts_[k];
+  trial[faceA] = a;
+  trial[faceB] = b;
+  if (!validate(trial, count_)) return false;
+  mounts_[faceA] = a;
+  mounts_[faceB] = b;
+  return true;
+}
+
+bool ChainMap::setAllMounts(const FaceMount* mounts, int count) {
+  if (count != count_) return false;
+  if (!validate(mounts, count)) return false;
+  for (int k = 0; k < count_; ++k) mounts_[k] = mounts[k];
+  return true;
+}
+
 void ChainMap::map(int face, int i, int j, int& cx, int& cy) const {
   const FaceMount& m = mounts_[face];
   const int w = (int)w_[face], h = (int)h_[face];

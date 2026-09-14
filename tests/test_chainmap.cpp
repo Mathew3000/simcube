@@ -186,6 +186,68 @@ TEST(chain_map_live_remount_keeps_the_table_valid) {
   checkBijection(cm);
 }
 
+TEST(chain_map_set_mounts_swaps_two_slots_atomically) {
+  FaceMount mounts[8];
+  ChainMap::defaultMounts(6, mounts);
+  ChainMap cm;
+  CHECK(cm.init(cube(), mounts, 6));
+
+  // Face 2 <-> face 5's slots. A single setMount(2, {slot:5,...}) would be rejected -- slot 5 is
+  // taken -- which is exactly the case this exists for.
+  CHECK(cm.setMounts(2, FaceMount{5, 1, 0}, 5, FaceMount{2, 0, 1}));
+  CHECK(cm.mount(2).slot == 5);
+  CHECK(cm.mount(2).rotate == 1);
+  CHECK(cm.mount(5).slot == 2);
+  CHECK(cm.mount(5).mirror == 1);
+  checkBijection(cm);
+}
+
+TEST(chain_map_set_mounts_rejects_an_invalid_pair_and_changes_neither) {
+  FaceMount mounts[8];
+  ChainMap::defaultMounts(6, mounts);
+  ChainMap cm;
+  CHECK(cm.init(cube(), mounts, 6));
+
+  // Both faces asking for slot 3 is not a valid table under any circumstances.
+  CHECK(!cm.setMounts(2, FaceMount{3, 0, 0}, 5, FaceMount{3, 0, 0}));
+  CHECK(cm.mount(2).slot == 2);
+  CHECK(cm.mount(5).slot == 5);
+
+  CHECK(!cm.setMounts(1, FaceMount{0, 0, 0}, 1, FaceMount{1, 0, 0}));  // same face twice
+  CHECK(!cm.setMounts(-1, mounts[0], 1, mounts[1]));                  // out of range
+}
+
+TEST(chain_map_set_all_mounts_restores_a_saved_table) {
+  FaceMount mounts[8];
+  ChainMap::defaultMounts(6, mounts);
+  ChainMap cm;
+  CHECK(cm.init(cube(), mounts, 6));
+
+  // An arbitrary permutation of a table that is already a bijection -- almost every single-face
+  // step from the default to this one would collide, which is exactly why this exists.
+  const FaceMount saved[6] = {{5, 2, 1}, {4, 0, 0}, {3, 1, 0}, {2, 3, 1}, {1, 0, 0}, {0, 2, 0}};
+  CHECK(cm.setAllMounts(saved, 6));
+  for (int i = 0; i < 6; ++i) {
+    CHECK(cm.mount(i).slot == saved[i].slot);
+    CHECK(cm.mount(i).rotate == saved[i].rotate);
+    CHECK(cm.mount(i).mirror == saved[i].mirror);
+  }
+  checkBijection(cm);
+}
+
+TEST(chain_map_set_all_mounts_rejects_a_bad_table_and_changes_nothing) {
+  FaceMount mounts[8];
+  ChainMap::defaultMounts(6, mounts);
+  ChainMap cm;
+  CHECK(cm.init(cube(), mounts, 6));
+
+  const FaceMount dup[6] = {{0, 0, 0}, {0, 0, 0}, {2, 0, 0}, {3, 0, 0}, {4, 0, 0}, {5, 0, 0}};
+  CHECK(!cm.setAllMounts(dup, 6));
+  CHECK(cm.mount(1).slot == 1);  // untouched
+
+  CHECK(!cm.setAllMounts(mounts, 5));  // count must match what this ChainMap was init()'d with
+}
+
 // --- driving a subset of the faces ---------------------------------------------------------------
 // A display node in a multi-node cube holds the whole six-panel table -- Geometry::bounds() derives
 // the container from it and every node must agree on that container exactly -- but drives only its

@@ -421,6 +421,68 @@ representative of the device.
 
 ---
 
+## The mini cube (WS2812B, plain ESP32)
+
+A second, much smaller cube, driven by a plain ESP32 (not an S3) over `platform/esp32mini/` — six
+8×8 WS2812B matrices instead of HUB75 panels. Same `core/` and `platform/app/`, one new `Display`
+implementation. See `MINI.md` for the full brief and `docs/DECISIONS.md` section 14 for what was
+found building it.
+
+```sh
+cd platform/esp32mini
+pio run -e mini              # build only
+pio run -e mini -t upload    # flash over USB (first flash only -- see OTA below)
+```
+
+If your board/adapter has no auto-reset circuit (this one doesn't), `-t upload` cannot reset it
+into the bootloader by itself: hold BOOT, tap RESET (or power-cycle), release BOOT, *then* run the
+upload. After the **first** flash, use the web UI below instead — that's the whole reason it has
+an upload form.
+
+### Web UI
+
+The cube hosts its own WiFi access point (bring-up convenience, not a network feature — nothing to
+configure to reach it from a phone standing next to the cube):
+
+| | |
+|---|---|
+| SSID | `partsim-mini` |
+| password | `partsim123` |
+| page | `http://192.168.4.1/` once connected |
+
+From there: a brightness slider, a colour picker for the beaker's base dye, and a firmware-upload
+form (drop a `.pio/build/mini/firmware.bin`, it flashes itself and reboots — no cable, no BOOT
+button, from here on). All three just turn the form into the exact console command a human would
+type (`b`, `d`) and hand it to `App::submitCommand`, or drive `Update.h` directly for the upload.
+
+### Serial console additions over the S3's
+
+115200 baud, same `?` help as the S3 firmware, plus:
+
+| | |
+|---|---|
+| `m <face> <slot> <rot> <mirror>` | also move a face to another chain slot; swaps with whatever was already there instead of failing |
+| `t` | orientation mode is now **sticky** — stays up until `t` toggles it off again, on both boards |
+| `w` / `w <n>` / `w -1` | the walk: light one physical LED at a time by raw strip index, bypassing the mount table entirely — the only tool that tells a driver bug from a mount-table bug |
+| `f` | freeze/unfreeze the canned tilt sequence used while no IMU is present |
+
+The mount table set via `m` (or restored from a previous session) is saved to NVS automatically on
+every accepted change — it survives a power cycle, unlike the S3 cube's, which is still an
+in-memory-only table pasted back by hand (`printMounts`'s C-array output).
+
+### What's different from the S3, and why
+
+- **288-particle cap, not the ~450 `MINI.md` derives.** The plain ESP32's usable static RAM before
+  the heap starts is ~125 KB, well under the S3's — measured against a real linked firmware image,
+  not assumed. `docs/DECISIONS.md` D77 has the numbers.
+- **No ESP-NOW chain, no second core, no physical IMU yet** — each descoped for a specific reason
+  (D81), not forgotten. Canned motion (a deterministic tilt sequence) drives gravity in the IMU's
+  absence.
+- **WiFi is on**, in AP mode, purely for the web UI above — that costs nothing extra in static RAM
+  the board wasn't already spending on the WiFi/BT stack regardless (D77 again).
+
+---
+
 ## Hardware bring-up
 
 Nothing below has been done. It is the list of things the host tests **cannot** stand in for,

@@ -37,6 +37,11 @@ class SystemHooks {
   // exists) correctly implements both as nothing.
   virtual void suspendSim() {}
   virtual void resumeSim() {}
+
+  // Called after the console (or any other command source) changes the mount table, so a
+  // platform that can persist it gets the chance to. Default no-op: a host build and a platform
+  // with no persistent storage correctly do nothing.
+  virtual void mountsChanged(const ChainMap&) {}
 };
 
 // Everything the application is given. Assembled by each platform's main(), which is the only

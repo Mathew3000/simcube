@@ -8,10 +8,12 @@
 // host verification and the firmware each carry their own copy of the budget, and the first time
 // one was edited the checks would quietly start measuring a configuration nobody ships.
 //
-// Three device roles, because a 64x64 cube cannot be driven by one board:
-//   PARTSIM_PROFILE_ESP32          one node, six 32x32 panels   (Milestone 2, still shipping)
-//   PARTSIM_PROFILE_ESP32_MASTER   physics + IMU, no panels     (Milestone 3)
-//   PARTSIM_PROFILE_ESP32_DISPLAY  two 64x64 faces of six       (Milestone 3, three of these)
+// Four device profiles now, one board type each -- a 64x64 cube cannot be driven by one board,
+// and the mini cube is a different display technology on the same six-panel-shell topology:
+//   PARTSIM_PROFILE_ESP32          one node, six 32x32 HUB75 panels    (Milestone 2, still shipping)
+//   PARTSIM_PROFILE_ESP32_MASTER   physics + IMU, no panels            (Milestone 3)
+//   PARTSIM_PROFILE_ESP32_DISPLAY  two 64x64 HUB75 faces of six        (Milestone 3, three of these)
+//   PARTSIM_PROFILE_ESP32_MINI     one plain ESP32, six 8x8 WS2812B    (the MINI.md bring-up cube)
 
 // --- shared by every device profile ------------------------------------------------------------
 // A CPU limit, not a memory one -- and MEASURED on hardware, which is the only reason this
@@ -46,6 +48,7 @@
 //   cube    32x32 x6, everything, d=3.0, 6-bit   what ships today (the plain ESP32 profile)
 //   beaker  64x64,    water only, d=2.5, 6-bit   liquid-only, so 30Hz physics is available
 //   future  64x64,    everything, d=1.0          host-verified only; no MCU runs it
+//   mini    8x8 x6,   water only, d=4.0, 8-bit   the WS2812B bring-up cube; see MINI.md
 //
 // Each sets only what it means to change; everything else falls through to the defaults below.
 //
@@ -86,6 +89,25 @@
 // beaker mode's colour resolution requires.
 #endif
 
+#ifdef PARTSIM_TIER_MINI
+// Water only, chroma ON. d = 4.0 puts one particle per texel at panel_res 8 (kWorldSize 32 / 8
+// texels = pitch 4.0 -- see MINI.md M1), which is the one configuration in the project where the
+// coarsest tier is not a compromise: finer particles would buy resolution the display cannot show.
+//
+// Chroma is not a luxury here, it is free and the point: WS2812B is 24-bit RGB per pixel where
+// HUB75 on this project is 6, so this display resolves colour better than any panel already
+// shipping, at zero extra hardware cost.
+#define PARTSIM_ENABLE_SAND 0
+#define PARTSIM_ENABLE_HEAT 0
+#define PARTSIM_ENABLE_CHROMA 1
+#define PARTSIM_REST_SPACING 4.0f
+// WS2812B is native 8-bit RGB -- there is no binary-code-modulated depth to match, unlike HUB75,
+// so this is the true hardware depth rather than a tuned compromise. PARTSIM_QUANTISE_OUTPUT stays
+// off (the default): there is no panel-side truncation to make the host/browser preview honest
+// about.
+#define PARTSIM_COLOUR_BITS 8
+#endif
+
 #ifdef PARTSIM_TIER_FUTURE
 // Deliberately beyond any MCU measured. The host build is where a configuration gets validated
 // before the silicon to run it exists; this is the rung that keeps the ladder honest.
@@ -118,6 +140,42 @@
 // No internal RGBA copy of every panel: the firmware resolves one face at a time into a single
 // staging buffer and blits it. Six panels of RGBA is 24KB, which is the difference between
 // fitting internal SRAM and not.
+#define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
+
+#elif defined(PARTSIM_PROFILE_ESP32_MINI)
+
+// A plain ESP32 driving six 8x8 WS2812B matrices as the shell of the cube -- one node, everything
+// on it: solver, (eventually) IMU fusion, and the display chain. Same shape as PARTSIM_PROFILE_ESP32
+// above at far lower panel resolution, because what differs is the display TECHNOLOGY, not the
+// topology: still six panels forming a closed shell, still one board driving all of them. See
+// MINI.md.
+//
+// PARTSIM_DEVICE_MAX_PARTICLES/GRID_CELLS/FIELD_CELLS above are NOT reused here, unlike the other
+// profiles. Those are sized against the S3's ~230KB SRAM budget; the plain ESP32 this profile
+// targets has a usable static-data (.bss+.data) region of only ~124.6KB before the heap even
+// starts (measured off platform/esp32mini's own link: dram0_0_seg is 0x2c200-0xdb5c bytes on this
+// part), and the framework + WiFi/BT static structures that a stock Arduino build links in
+// regardless of runtime use already cost ~48KB of that. The dominant term is the neighbour cache
+// (PARTSIM_NEIGHBOUR_CACHE, Config.h below): kMaxNeighbours * 2 bytes * kMaxParticles, which at
+// the inherited cap of 512 particles is 64KB by itself. See DECISIONS.md for the number this was
+// measured against and why it undercuts MINI.md's derived ~450-particle estimate -- CPU was never
+// the binding constraint on this board; static RAM is.
+#define PARTSIM_DEFAULT_MAX_PARTICLES 288
+#define PARTSIM_DEFAULT_MAX_PANELS PARTSIM_DEVICE_MAX_PANELS
+#define PARTSIM_DEFAULT_MAX_PANEL_TEXELS 64  // 8x8
+#define PARTSIM_DEFAULT_PANEL_RES 8
+#define PARTSIM_DEFAULT_MAX_RENDER_PANELS 6  // it drives all of them
+#define PARTSIM_DEFAULT_DRIVES_PANELS 1
+#define PARTSIM_DEFAULT_RUNS_SOLVER 1
+// Grid cells at kRestSpacing 4.0: kSmoothRadius 8.0, kCellSize 8.0, so a 32-unit world is
+// ceil(32/8)^3 = 64 cells. 96 leaves headroom for a slab's different aspect ratio without paying
+// for the S3 tiers' much finer spacing, which this board will never run.
+#define PARTSIM_DEFAULT_MAX_GRID_CELLS 96
+// Heat is off in the mini tier, so this is mostly unused; kept small rather than zero so a build
+// that overrides PARTSIM_ENABLE_HEAT for this profile does not silently corrupt memory.
+#define PARTSIM_DEFAULT_MAX_FIELD_CELLS 64
+// Same reasoning as PARTSIM_PROFILE_ESP32: resolve one face at a time into a staging buffer and
+// blit it, rather than keep an internal RGBA copy of every panel.
 #define PARTSIM_DEFAULT_INTERNAL_PIXELS 0
 
 #elif defined(PARTSIM_PROFILE_ESP32_MASTER)

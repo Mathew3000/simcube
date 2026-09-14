@@ -83,6 +83,13 @@ class App {
   // may well block for tens of seconds, which is why the caller is the lowest-priority task.
   void consolePoll();
 
+  // Dispatches one command line through exactly the same path the serial console uses -- the
+  // entry point for any OTHER transport that wants to drive App without re-parsing or duplicating
+  // a single command's logic (the mini cube's web UI, for instance, turns a brightness slider into
+  // "b 128" and hands it here). Copies into a scratch buffer because the console's own handler
+  // tokenises in place.
+  void submitCommand(const char* line);
+
   // A frame the scheduler could not place on time. Counted rather than ignored, because a device
   // silently running at half rate is worth knowing about -- it is the first thing `r` reports.
   void noteOverrun() { ++overruns_; }
@@ -193,9 +200,24 @@ class App {
   volatile uint32_t tail_ = 0;  // written by the consumer only
   volatile uint32_t dropped_ = 0;
 
+  // What simStep draws, replacing what used to be a one-shot "draw the test pattern once" flag.
+  // That was wrong for orientation mode (MINI.md M3): the user walks around the object, corrects
+  // the mount table, and needs to watch it change -- which needs the pattern to stay up rather
+  // than being drawn for one ~33ms frame before the fluid overwrote it. Fixing that here rather
+  // than only for the mini cube is deliberate: it was already true for the HUB75 `t` command,
+  // which flashed the same way.
+  enum class Mode : uint8_t { Fluid, Orientation, Walk };
+
   Stats stats_;
   volatile bool paused_ = false;
-  volatile bool showTestPattern_ = false;
+  volatile Mode mode_ = Mode::Fluid;
+  // The walk's current strip index (MINI.md 6.3), persisted across `w` calls so a bare `w`
+  // steps to the next one.
+  int walkIndex_ = 0;
+  // No IMU exists on the mini cube yet, so gravity has to come from somewhere else deterministic
+  // (see the canned-motion path in simStep). Frozen holds it at whatever `stats_.frames` it was
+  // frozen at, four lines' worth of console toggle per the brief.
+  volatile bool cannedFrozen_ = false;
   volatile uint32_t overruns_ = 0;
 
   // simStep's own fps window, which is per-second rather than per-frame.

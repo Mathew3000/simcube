@@ -42,6 +42,19 @@ class Display {
   // them. A property of the mount table rather than of the code, which is why it is reported at
   // boot rather than assumed.
   virtual bool allRunsHorizontal(const Geometry& g) const = 0;
+
+  // The walk (MINI.md 6.3): lights exactly one physical pixel by its raw index in the display's
+  // own serial addressing and blanks everything else; `index < 0` turns everything off. It
+  // deliberately bypasses ChainMap and the renderer, because a fluid -- or even the orientation
+  // pattern -- cannot tell a driver bug (wrong strip order, wrong serpentine) from a mount-table
+  // bug, and this is the one tool that can.
+  //
+  // NOT pure virtual: a technology with no such per-pixel serial address (HUB75 addresses a whole
+  // row at once) has nothing to implement, so the default is a no-op that reports false, and
+  // PanelDriver/NullDisplay need no change at all.
+  virtual bool lightOne(int index) { (void)index; return false; }
+  // How many indices lightOne accepts, 0 where it is not implemented.
+  virtual int lightCount() const { return 0; }
 };
 
 // A display that is not there. The master role, the QEMU environment and the host build all need

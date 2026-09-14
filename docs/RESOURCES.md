@@ -1,7 +1,7 @@
 # Resource allocation — master vs display
 
 Companion to [CUBE-PCB.md](CUBE-PCB.md) and [MCU-REQUIREMENTS.md](MCU-REQUIREMENTS.md). Where every byte, cycle, pin and megabyte-per-second
-lives, per ESP32-S3 role. **[M]** = measured, **[A]** = assumed and needs bench confirmation.
+lives, per ESP32-S3 role — except §5.2, which is the plain ESP32 `MINI.md` targets. **[M]** = measured, **[A]** = assumed and needs bench confirmation.
 
 **Revision:** 0.1. Supersedes the "one S3 cannot drive six 64×64 panels" claim in CUBE-PCB §1 —
 see §1 below.
@@ -500,6 +500,93 @@ The visual problem this exposes is not frame rate. At 640 particles the waterlin
 filling a volume needs particles proportional to 1/d^3, so coarsening `kRestSpacing` from 1.5 to
 3.0 cuts the count for the same waterline by **eight** (2427 -> 303). `kSplatRadiusWorld` must
 follow it -- left absolute, coarser particles stop overlapping and the fluid reads as dots.
+
+## 5.2 The plain ESP32 (MINI.md) -- nothing in this document has been measured on this part before
+
+Six 8x8 WS2812B matrices on a plain ESP32 (Xtensa LX6, dual core, 240 MHz), not an S3. Everything
+above this section is the S3; this is the first entry for the other chip.
+
+### Static RAM is the binding constraint, not CPU -- measured off the real linked firmware
+
+`docs/DECISIONS.md` D77 has the full derivation. In short: the classic ESP32's usable static-data
+region (`dram0_0_seg`, before the heap) is **124580 bytes**, measured off
+`platform/esp32mini`'s own link
+(`~/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/ld/memory.ld`) -- smaller
+than the S3's, and further reduced by ~48KB of WiFi/BT/lwip static structures a stock Arduino build
+links in whether or not the radio is used. `PARTSIM_PROFILE_ESP32_MINI` reusing the S3's
+512-particle capacity outright overflows that region by 28096 bytes; at **288 particles** the real
+firmware image links with 13060 bytes (10.5%) to spare:
+
+```
+RAM:   [===       ]  34.0% (used 111520 bytes from 327680 bytes)   # PlatformIO's own, larger total
+dram0.data  25472 B, dram0.bss  91808 B  =  117280 B measured directly off the ELF (xtensa-esp32-elf-size -A)
+```
+
+(PlatformIO's summary line reports against the SoC's *total* SRAM, 327680 B, which is not the same
+figure as `dram0_0_seg` -- the smaller pre-heap region is the one that actually fails to link.)
+
+The dominant per-particle cost is the neighbour cache, not the particle pool itself:
+`kMaxNeighbours(64) * 2 bytes * kMaxParticles`, confirmed linear against `partsim_memreport`'s
+`SpatialHash` line at three particle counts (512 -> 68108 B, 288 -> 37932 B, 160 -> 21164 B).
+
+### The render at 8x8 -- looked at, not just measured
+
+`partsim_ppm 400 8` (host build, `PARTSIM_PROFILE=esp32-mini`, `PARTSIM_TIER_MINI=1`,
+`PARTSIM_INTERNAL_PIXELS=1`), converted to PNG and viewed: the water-tank scene fills to 158 of the
+288-particle cap and reads as a **continuous waterline crossing all four side-face seams**, not as
+disconnected blobs -- softly blurred, as `MINI.md` section 6.1 expected at a 5x5-texel splat
+footprint on an 8-texel face, but legible as liquid rather than as the handful-of-lumps result that
+would have supported `DESIGN-SUGGESTIONS.md`'s argument for replacing the solver. A 35-degree tilt
+renders as a correspondingly slanted line, also continuous across seams -- the mount/ChainMap
+geometry is not the thing to doubt here.
+
+### The particle sweep -- CPU binds far tighter than the 288-particle memory ceiling
+
+`x` on the real board (water only, no heat field):
+
+```
+  count    sim/step   splat   resolve    blit    frame    fps   verdict
+     72       4.88    0.92      0.23    2.45    13.13   76.1   fits
+    144      17.28    1.98      0.27    2.45    38.99   25.6   OVER
+    216      34.75    2.51      0.27    2.45    74.47   13.4   OVER
+    288      53.54    3.27      0.31    2.45   112.80    8.9   OVER
+
+  largest sweep point that fits: 72 particles
+```
+
+So D77's 288-particle figure is the *memory* ceiling -- how large a pool can be allocated at all --
+and it is not the number that decides the count. At 30 fps and 2 substeps/frame, **72 particles**
+is what the plain ESP32's CPU actually sustains, four times fewer than the pool it can hold. Cost
+scales similarly to the S3's measured n^1.77 (§5.1): quadrupling the count from 72 to 288 raises
+`sim/step` by 11x, not 4x.
+
+Sand-and-heat is worse: the mini tier disables both, but the `kettle` probe (95 particles, forced
+active heat field) still costs 9.20 ms/step against 4.88 ms for 72 plain-water particles at the
+same rough count -- consistent with the S3's own finding that an active heat field, not particle
+count, is what makes splatting expensive.
+
+**The `blit` column here (2.45 ms) does not match a live frame's blit cost, measured separately at
+12.18-12.61 ms via `r` during normal operation** -- both real numbers, off the same board, for the
+same `present()` call. The likely explanation: FastLED's RMT driver queues a frame to the RMT
+peripheral and returns before the wire transmission finishes, so 30 back-to-back calls in the
+benchmark's tight loop measure queueing overhead more often than they measure a wait for the
+previous frame to finish, while paced ~33ms-apart calls in a real frame each land on an RMT
+peripheral that has had time to finish and so must wait out something closer to the
+384 * 24 * 1.25us = 11.5ms protocol floor. Not fully root-caused -- flagged rather than papered
+over. The 12.18-12.61ms figures are the ones to trust for a real frame budget; they are within 10%
+of the hard protocol floor MINI.md predicted, which is itself a useful confirmation that FastLED's
+RMT path isn't wasting cycles for this LED count.
+
+One live frame at scene 0 (158 particles, `r`): `sim 41.60ms splat 2.04ms blit 12.61ms`, 17.2 fps.
+Consistent with the sweep: 158 particles is already well past what 30 fps affords on this chip.
+
+### Still to measure -- needs the physical cube
+
+| measurement | command | why it matters |
+|---|---|---|
+| real current draw | a meter across the 5V rail | section M4's 21A-at-full-white and the 2000mA budget are datasheet arithmetic, not a measurement of these specific LEDs |
+| serpentine vs progressive | `w` (the walk) | the code defaults to progressive per the user's recollection; section 0 of `MINI.md` was explicit that this must be confirmed, not assumed |
+| the FastLED async-blit question above | a scope on the data line, or timing `show()` alone in a tight loop vs. paced at 33ms | would turn a plausible explanation into a measured one |
 
 ## 6. What has to be measured before the topology is settled
 

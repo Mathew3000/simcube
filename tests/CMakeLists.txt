@@ -22,6 +22,7 @@ add_executable(partsim_tests
   test_beaker_spill.cpp
   test_font.cpp
   test_beaker.cpp
+  test_calibration.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

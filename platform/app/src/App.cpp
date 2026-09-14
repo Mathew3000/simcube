@@ -164,11 +164,14 @@ void App::simStep() {
   Clock& clk = *plat_.clock;
   Display& disp = *plat_.display;
 
-  if (showTestPattern_) {
+  // Orientation and walk hold the display until switched off; see the Mode comment in App.h.
+  // Walk needs nothing here at all -- lightOne() already wrote the strip from the console thread,
+  // and simStep must not call present() over it.
+  if (mode_ == Mode::Orientation) {
     disp.testPattern(sim_.geometry());
-    showTestPattern_ = false;
     return;
   }
+  if (mode_ == Mode::Walk) return;
 
   const uint32_t t0 = clk.micros();
   pumpMotion();
@@ -179,6 +182,14 @@ void App::simStep() {
     if (motion_.seeded()) {
       sim_.setGravityObject(motion_.gravityObject());
       sim_.setContainerAccel(motion_.containerAccel());
+    } else if (!plat_.imu->present() && !cannedFrozen_) {
+      // No IMU exists at all (MINI.md M5) -- present() false is the ONLY branch this seam needs;
+      // a board whose IMU answers takes the motion_.seeded() path above instead, unchanged. A
+      // deterministic function of the step index, like the golden sequence and the beaker-spill
+      // fixture's tiltAt (tests/test_beaker_spill.cpp): no clock, no RNG, so a run reproduces.
+      const float t = (float)stats_.frames * 0.017f;
+      sim_.setGravityObject(normalize(Vec3{fsin(t), fcos(t * 0.37f), fsin(t * 0.53f) * 0.5f}) *
+                             kGravityMag);
     }
     stats_.substeps = sim_.advance(1.0f / (float)kTargetFps);
   }
@@ -308,12 +319,16 @@ void App::printHelp() {
   c.println("  c            toggle auto-cycle");
   c.println("  b <0-255>    panel brightness");
   c.println("  m            print the face mount table");
-  c.println("  m <f> <r> <x>  set face f to rotation r (0-3), mirror x (0/1)");
-  c.println("  t            show the orientation test pattern");
+  c.println("  m <f> <r> <x>  set face f to rotation r (0-3), mirror x (0/1); keeps its slot");
+  c.println("  m <f> <s> <r> <x>  also move face f to slot s; swaps with whatever was there");
+  c.println("  t            toggle orientation mode (stays up until toggled off)");
+  c.println("  w            walk: light the next strip index alone (bypasses the mount table)");
+  c.println("  w <n>        walk: light strip index n alone; w -1 turns it off, resumes fluid");
   c.println("  i            IMU state");
   c.println("  r            frame timing and memory");
   c.println("  g            run the golden determinism sequence (blocks ~30s)");
   c.println("  p            pause/resume the physics");
+  c.println("  f            freeze/unfreeze the canned tilt used when no IMU is present");
   c.println("  x            benchmark: particle sweep, needs no panels attached");
   c.println("  o <x> <y> <z>  tilt: set object-space gravity by hand (whole numbers, 0 0 -1 etc)");
   c.println("  n <id> <len>   this cube's place in the chain (n 1 3 = second of three)");
@@ -332,13 +347,24 @@ void App::printMounts() {
     c.printf("  face %d -> slot %u rot %u mirror %u  (row %s)\n", i, m.slot, m.rotate, m.mirror,
              r.dy == 0 ? "horizontal" : "vertical, slower blit");
   }
+  // The mount table this exercise arrives at is the deliverable, and it must not be retyped
+  // after every reboot (MINI.md M3, "persisting the result"): paste this back as the profile's
+  // defaultMounts. NVS persistence of it is out of scope.
+  c.println("paste back as this profile's default mounts:");
+  c.println("static const FaceMount kMounts[6] = {");
+  for (int i = 0; i < cm.count(); ++i) {
+    const FaceMount& m = cm.mount(i);
+    c.printf("  {%u, %u, %u},\n", m.slot, m.rotate, m.mirror);
+  }
+  c.println("};");
 }
 
 void App::printImu() {
   Console& c = *plat_.console;
   if (!plat_.imu->present()) {
     c.printf("IMU absent (WHO_AM_I read 0x%02X, expected 0x6C)\n", plat_.imu->whoAmI());
-    c.println("  gravity is held at the default -y, so the sim still runs level");
+    c.printf("  gravity follows a canned tilt sequence (`f` to freeze it)%s\n",
+             cannedFrozen_ ? " -- currently frozen" : "");
     return;
   }
   const Vec3 d = motion_.down();
@@ -537,9 +563,11 @@ void App::runBench() {
 void App::handleLine(char* line) {
   Console& c = *plat_.console;
   // Tokenise in place; no String, no allocation.
-  char* argv[4] = {nullptr, nullptr, nullptr, nullptr};
+  // 5, not 4: `m <face> <slot> <rot> <mirror>` (MINI.md M3's slot-swap form) is the first command
+  // that needs a 4th argument after the letter.
+  char* argv[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
   int argc = 0;
-  for (char* p = line; *p && argc < 4;) {
+  for (char* p = line; *p && argc < 5;) {
     while (*p == ' ' || *p == '\t') ++p;
     if (!*p) break;
     argv[argc++] = p;
@@ -592,8 +620,18 @@ void App::handleLine(char* line) {
       // configuration surface for a chain belongs.
       if (argc >= 3) {
         const int r = atoi(argv[1]), g = atoi(argv[2]);
-        const int rc = r < 0 ? 0 : (r > 255 ? 255 : r);
-        const int gc = g < 0 ? 0 : (g > 255 ? 255 : g);
+        int rc = r < 0 ? 0 : (r > 255 ? 255 : r);
+        int gc = g < 0 ? 0 : (g > 255 ? 255 : g);
+        // R and G are shares of a 255 budget, not independent channels -- blue is whatever is
+        // left (Renderer::splatChroma). Clamping each to 0..255 alone still lets r+g exceed 255,
+        // which drives the implied blue negative; found via the mini cube's web UI feeding an
+        // ordinary colour picker's R/G straight through. Scale both down together so the
+        // requested RATIO survives rather than favouring whichever argument came first.
+        const int sum = rc + gc;
+        if (sum > 255) {
+          rc = (rc * 255) / sum;
+          gc = (gc * 255) / sum;
+        }
         // 8.8 fixed point: a byte per channel loses 98% of the dye to truncation over a few
         // hundred diffusion steps (M4-A measured it), so what the user types is the high byte.
         sim_.setDye((uint16_t)(rc * 256), (uint16_t)(gc * 256));
@@ -653,23 +691,97 @@ void App::handleLine(char* line) {
       }
       break;
 
-    case 'm':
-      if (argc >= 4) {
+    case 'm': {
+      bool changed = false;
+      if (argc == 4) {
+        // Unchanged: face keeps its chain slot, only rotation/mirror change.
         ChainMap& cm = plat_.display->chain();
         const int f = atoi(argv[1]);
         FaceMount m{(uint8_t)f, (uint8_t)atoi(argv[2]), (uint8_t)atoi(argv[3])};
         if (f >= 0 && f < cm.count()) m.slot = cm.mount(f).slot;
         if (f < 0 || f >= cm.count() || !cm.setMount(f, m)) {
           c.println("rejected: that would not be a valid mount table");
+        } else {
+          changed = true;
+        }
+      } else if (argc >= 5) {
+        // The slot-moving form (MINI.md M3): which physical matrix is which face is exactly
+        // what a wrong chain slot gets, unlike the HUB75 cube where slot was already right and
+        // only the gluing was in question.
+        ChainMap& cm = plat_.display->chain();
+        const int f = atoi(argv[1]);
+        const int slot = atoi(argv[2]);
+        if (f < 0 || f >= cm.count() || slot < 0 || slot >= cm.count()) {
+          c.println("rejected: face or slot out of range");
+        } else {
+          const FaceMount m{(uint8_t)slot, (uint8_t)atoi(argv[3]), (uint8_t)atoi(argv[4])};
+          int occupant = -1;
+          for (int i = 0; i < cm.count(); ++i)
+            if (i != f && cm.mount(i).slot == (uint8_t)slot) { occupant = i; break; }
+          bool ok;
+          if (occupant < 0) {
+            ok = cm.setMount(f, m);
+          } else {
+            // The slot f is asking for is taken: swap, rather than reject, because "these two are
+            // the wrong way round" is the single most likely thing a `t` walk just found.
+            FaceMount occ = cm.mount(occupant);
+            occ.slot = cm.mount(f).slot;
+            ok = cm.setMounts(f, m, occupant, occ);
+            if (ok) c.printf("swapped: face %d <-> face %d\n", f, occupant);
+          }
+          if (!ok) c.println("rejected: that would not be a valid mount table");
+          changed = ok;
         }
       }
+      if (changed && plat_.hooks) plat_.hooks->mountsChanged(plat_.display->chain());
       printMounts();
       break;
+    }
 
     case 't':
-      showTestPattern_ = true;
-      c.println("test pattern: white dot at texel (1,1), red arm +x (3), green arm +y (5)");
-      c.println("adjust with `m <face> <rot> <mirror>` until every face reads the same");
+      mode_ = (mode_ == Mode::Orientation) ? Mode::Fluid : Mode::Orientation;
+      if (mode_ == Mode::Orientation) {
+        c.println("orientation mode: on -- stays up until `t` again");
+        c.println("eight corner colours; every corner must read the same on the three faces");
+        c.println("meeting it. correct with `m`, including the slot-swap form; see `?`.");
+      } else {
+        c.println("orientation mode: off");
+      }
+      break;
+
+    case 'w': {
+      const Display& disp = *plat_.display;
+      if (disp.lightCount() <= 0) {
+        c.println("walk: this display has no addressable strip");
+        break;
+      }
+      if (argc >= 2) {
+        walkIndex_ = atoi(argv[1]);
+      } else if (mode_ == Mode::Walk) {
+        ++walkIndex_;
+      }
+      if (walkIndex_ < 0) {
+        mode_ = Mode::Fluid;
+        plat_.display->lightOne(-1);
+        c.println("walk: off, resuming fluid");
+      } else {
+        mode_ = Mode::Walk;
+        if (plat_.display->lightOne(walkIndex_))
+          c.printf("walk: index %d of %d\n", walkIndex_, disp.lightCount());
+        else
+          c.printf("walk: %d is out of range (0..%d)\n", walkIndex_, disp.lightCount() - 1);
+      }
+      break;
+    }
+
+    case 'f':
+#ifdef PARTSIM_PROFILE_ESP32_DISPLAY
+      c.println("no motion on a display node: gravity arrives in the frame from the master");
+#else
+      cannedFrozen_ = !cannedFrozen_;
+      c.printf("canned tilt %s\n", cannedFrozen_ ? "frozen" : "running");
+      if (plat_.imu->present()) c.println("note: an IMU is present, so this has no effect");
+#endif
       break;
 
     case 'i':
@@ -711,6 +823,14 @@ void App::consolePoll() {
   char buf[64];
   const int n = plat_.console->readLine(buf, sizeof(buf));
   if (n > 0) handleLine(buf);
+}
+
+void App::submitCommand(const char* line) {
+  char buf[64];
+  size_t n = 0;
+  while (line[n] && n + 1 < sizeof(buf)) { buf[n] = line[n]; ++n; }
+  buf[n] = '\0';
+  handleLine(buf);
 }
 
 #pragma GCC diagnostic pop
