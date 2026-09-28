@@ -33,8 +33,11 @@ changes; reload the browser page as well.
 - **Reset colour** deliberately replaces the selected cube's entire colour field.
   It also rejoins its airborne droplets while preserving its total water volume.
 - **Swap positions** demonstrates that routing follows identity, not world position.
-- **Reset pair** initializes cube 1 to 65% blue water and cube 2 to 35% red water.
-  Their initial combined amount is 100% of one cube's capacity.
+- **Initial water** sets each cube's starting fill (0–100%) and colour (clear,
+  blue or red). Changes take effect when you press **Reset pair**, which also
+  returns both cubes upright and clears droplets, flow and dye motion. Defaults
+  are 65% blue in cube 1 and 35% red in cube 2. Settings follow cube identity
+  when positions are swapped; Reset keeps the current pause/transfer settings.
 
 The preview is a two-cube ring (1 → 2 → 1). All six LED faces remain visible;
 its green +Y rim marks a virtual opening. A full receiver applies backpressure:

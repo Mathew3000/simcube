@@ -67,9 +67,21 @@ $('inkDemo').onclick = () => {
 };
 $('bloom').onchange = () => { view.bloomPass.enabled = $('bloom').checked; };
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; };
+for (let i = 0; i < 2; ++i) {
+  const fill = $(`initialFill${i}`);
+  const updateFillLabel = () => { $(`initialFillValue${i}`).value = `${fill.value}%`; };
+  fill.oninput = updateFillLabel;
+  updateFillLabel();
+}
 $('reset').onclick = () => {
   mod._sw_init(res);
-  for (let i = 0; i < 2; ++i) { poses[i].set(0,0,0); view.beakers[i].body.quaternion.identity(); }
+  for (let i = 0; i < 2; ++i) {
+    mod._sw_fill(i, Number($(`initialFill${i}`).value)/100);
+    mod._sw_colour(i, Number($(`initialColour${i}`).value));
+    poses[i].set(0,0,0);
+    view.beakers[i].body.quaternion.identity();
+  }
+  accumulator = 0;
   syncSliders();
   mod._sw_render();
 };
