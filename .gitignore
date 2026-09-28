@@ -16,3 +16,5 @@ platform/wasm/web/public/partsim.wasm
 # one is fine and a stale one fails ctest.
 platform/wasm/web/public/partsim_beaker.mjs
 platform/wasm/web/public/partsim_beaker.wasm
+platform/wasm/web/public/partsim_surface.mjs
+platform/wasm/web/public/partsim_surface.wasm

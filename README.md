@@ -15,6 +15,13 @@ implementation, three build targets — what you see in the browser is what the 
 
 ## Status
 
+**Experimental lightweight water:** the `feature/lightweight-water` branch adds
+a portable surface/slosh backend and a two-cube pouring preview at 8×8, 32×32
+or 64×64 per face. Run `scripts/build_wasm.sh --surface`, then
+`scripts/serve.sh` and open `/surface.html`. See
+[Surface water prototype](docs/SURFACE-WATER.md) for the model, tests and remaining
+ESP32 integration. Existing particle modes remain available.
+
 **Milestone 1 is complete. Milestone 2 (ESP32 firmware) is written but not yet run on
 hardware** — the panels and the board are in transit. Everything that can be verified without a
 device has been; see [Hardware bring-up](#hardware-bring-up) for the checklist of what cannot.

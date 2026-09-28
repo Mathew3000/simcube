@@ -9,6 +9,7 @@
 #                                                                  compares against the host
 #   scripts/build_wasm.sh --beaker   -> public/partsim_beaker.mjs  the beaker tier: chroma, water
 #                                                                  only, d=2.5. beakers.html only.
+#   scripts/build_wasm.sh --surface -> public/partsim_surface.mjs lightweight water, surface.html
 #
 # --beaker is a FLAG rather than a -D the caller passes, because the switch that matters
 # (PARTSIM_ENABLE_CHROMA) is set by the tier inside Config.h and is not a CMake cache variable:
@@ -23,7 +24,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-: "${EMSDK_PYTHON:=/opt/homebrew/bin/python3.12}"
+if [ -z "${EMSDK_PYTHON:-}" ]; then
+  if [ -x /opt/homebrew/bin/python3.12 ]; then
+    EMSDK_PYTHON=/opt/homebrew/bin/python3.12
+  else
+    EMSDK_PYTHON="$(command -v python3)"
+  fi
+fi
 export EMSDK_PYTHON
 EMSDK_DIR="${EMSDK_DIR:-$HOME/emsdk}"
 
@@ -40,6 +47,13 @@ if [ "${1:-}" = "--beaker" ]; then
   BUILD_DIR=build-wasm-beaker
   TIER_FLAGS="-DCMAKE_CXX_FLAGS=-DPARTSIM_TIER_BEAKER=1"
 fi
+TARGET=partsim
+if [ "${1:-}" = "--surface" ]; then
+  shift
+  NAME=partsim_surface
+  BUILD_DIR=build-wasm-surface
+  TARGET=partsim_surface
+fi
 
 if ! command -v emcmake >/dev/null 2>&1; then
   if [ -f "$EMSDK_DIR/emsdk_env.sh" ]; then
@@ -53,9 +67,15 @@ if ! command -v emcmake >/dev/null 2>&1; then
   fi
 fi
 
+MODULE_NAME="$NAME"
+if [ "$TARGET" = partsim_surface ]; then
+  # The independent target has a fixed name. Keep the particle target's output
+  # distinct even if someone later builds all targets in this build directory.
+  MODULE_NAME=partsim
+fi
 emcmake cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
-  -DPARTSIM_WASM_NAME="$NAME" ${TIER_FLAGS:+"$TIER_FLAGS"} "$@" >/dev/null
-cmake --build "$BUILD_DIR" -j
+  -DPARTSIM_WASM_NAME="$MODULE_NAME" ${TIER_FLAGS:+"$TIER_FLAGS"} "$@" >/dev/null
+cmake --build "$BUILD_DIR" --target "$TARGET" -j
 
 DEST="$ROOT/platform/wasm/web/public"
 mkdir -p "$DEST"

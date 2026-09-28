@@ -5,6 +5,19 @@
 # here, not by cp.
 set(PARTSIM_WASM_NAME "partsim" CACHE STRING "Basename of the emitted .mjs/.wasm")
 
+# Dedicated surface backend preview; no PBF state, no dependency on its ABI.
+add_executable(partsim_surface surface_bindings.cpp)
+target_link_libraries(partsim_surface PRIVATE partsim_core)
+target_compile_options(partsim_surface PRIVATE -Wall -Wextra -O3)
+set_target_properties(partsim_surface PROPERTIES SUFFIX ".mjs")
+target_link_options(partsim_surface PRIVATE
+  -O3 --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createSurfaceWater
+  -sINITIAL_MEMORY=4194304 -sSTACK_SIZE=131072 -sALLOW_MEMORY_GROWTH=0
+  -sENVIRONMENT=web,node -sFILESYSTEM=0 -sMALLOC=emmalloc
+  -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32
+  "-sEXPORTED_FUNCTIONS=['_sw_init','_sw_resolution','_sw_basis','_sw_pixels','_sw_orient','_sw_impulse','_sw_fill','_sw_volume','_sw_flow','_sw_state_bytes','_sw_step','_sw_render']"
+)
+
 add_executable(partsim bindings.cpp)
 target_link_libraries(partsim PRIVATE partsim_core)
 target_compile_options(partsim PRIVATE -Wall -Wextra -O3)

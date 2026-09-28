@@ -19,6 +19,7 @@ add_library(partsim_core STATIC
   src/SpillChain.cpp
   src/Font3x5.cpp
   src/BeakerOverlay.cpp
+  src/SurfaceWater.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)

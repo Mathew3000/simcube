@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>simcube — surface water prototype</title>
+<style>
+  :root { color-scheme: dark; font: 14px/1.5 system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #050a12; color: #e7f3ff; overflow: hidden; }
+  canvas { display: block; touch-action: none; }
+  #controls { position: fixed; z-index: 2; top: 18px; left: 18px; width: 270px;
+    max-height: calc(100vh - 36px); overflow-y: auto; padding: 20px;
+    background: #101c2aed; border: 1px solid #294258; border-radius: 12px; }
+  h1 { margin: 0 0 6px; font-size: 20px; } h2 { font-size: 14px; margin: 18px 0 8px; }
+  p { color: #9fb6ca; font-size: 12px; margin: 8px 0; }
+  a { color: #79d4ef; } label { display: block; margin: 8px 0; }
+  select, button { background: #1a3044; color: #e7f3ff; border: 1px solid #365870;
+    padding: 7px 10px; border-radius: 5px; font: inherit; cursor: pointer; }
+  button:hover { background: #28485f; } input[type=range] { width: 100%; accent-color: #54cbe8; }
+  .row { display: flex; gap: 7px; margin: 8px 0; flex-wrap: wrap; }
+  #stats { font-variant-numeric: tabular-nums; border-top: 1px solid #294258; padding-top: 10px; }
+  #error { position: fixed; z-index: 5; inset: 0; background: #101724; padding: 40px;
+    white-space: pre-wrap; display: none; }
+  #hint { position: fixed; right: 22px; bottom: 12px; text-align: right; pointer-events: none; }
+  @media (max-width: 650px) {
+    #controls { top: 8px; left: 8px; width: 220px; max-height: 48vh; padding: 12px; }
+    #hint { max-width: 180px; }
+  }
+</style>
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
+</head>
+<body>
+<section id="controls">
+  <h1>Surface water</h1>
+  <p>Lightweight C++ prototype · six LED faces<br>Fixed chain: cube 1 → 2 → 1</p>
+  <label>Faces <select id="resolution"><option>8</option><option selected>32</option><option>64</option></select> × pixels</label>
+  <label>Control <select id="selected"><option value="0">Cube 1</option><option value="1">Cube 2</option></select></label>
+  <h2>Tilt selected cube</h2>
+  <label>Pitch <output id="pitchValue">0°</output><input id="pitch" aria-label="Pitch" type="range" min="-180" max="180" value="0"></label>
+  <label>Roll <output id="rollValue">0°</output><input id="roll" aria-label="Roll" type="range" min="-180" max="180" value="0"></label>
+  <div class="row"><button id="upright">Upright</button><button id="tip">Tip to pour</button><button id="shake">Shake</button></div>
+  <label><input type="checkbox" id="pouring" checked> Enable transfer</label>
+  <label><input type="checkbox" id="bloom"> Bloom</label>
+  <div class="row"><button id="pause">Pause</button><button id="reset">Reset pair</button><button id="swap">Swap positions</button></div>
+  <h2>Water volume</h2>
+  <p id="volumes">Loading…</p>
+  <p id="flow"></p>
+  <p id="stats">Loading the surface WASM module…</p>
+  <p>Green rim = virtual opening. Full receivers block transfer. Timings are for this browser, not an ESP32.</p>
+  <a href="./index.html">Particle preview</a> · <a href="./beakers.html">Particle beakers</a>
+</section>
+<p id="hint">Drag to tilt the selected cube<br>Right-drag to orbit · scroll to zoom</p>
+<div id="error" role="alert"></div>
+<script type="module" src="./surface.js"></script>
+</body>
+</html>

@@ -1,4 +1,7 @@
 add_executable(partsim_bench bench.cpp)
+add_executable(partsim_surface_bench surface_bench.cpp)
+target_link_libraries(partsim_surface_bench PRIVATE partsim_core)
+target_compile_options(partsim_surface_bench PRIVATE -Wall -Wextra)
 target_link_libraries(partsim_bench PRIVATE partsim_core)
 target_compile_options(partsim_bench PRIVATE -Wall -Wextra)
 
