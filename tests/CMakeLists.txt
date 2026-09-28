@@ -23,6 +23,7 @@ add_executable(partsim_tests
   test_font.cpp
   test_beaker.cpp
   test_surface_water.cpp
+  test_water_effects.cpp
 )
 target_link_libraries(partsim_tests PRIVATE partsim_core)
 target_include_directories(partsim_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

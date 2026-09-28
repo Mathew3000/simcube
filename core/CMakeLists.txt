@@ -20,6 +20,8 @@ add_library(partsim_core STATIC
   src/Font3x5.cpp
   src/BeakerOverlay.cpp
   src/SurfaceWater.cpp
+  src/DyeField.cpp
+  src/WaterEffects.cpp
 )
 
 target_include_directories(partsim_core PUBLIC include)

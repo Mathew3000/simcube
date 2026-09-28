@@ -1,116 +1,169 @@
-# Lightweight surface water — first prototype
+# Surface water, local dye and splashes
 
 Branch: `feature/lightweight-water`.
 
-This backend targets six-faced LED cubes that tilt, slosh, fill and pour into
-the next cube by identity. It emulates the visible liquid boundary instead of
-solving particle density throughout the volume. It is separate from the PBF
-backend: existing scenes, golden hashes and firmware selection are unchanged.
+The C++ backend emulates a container's visible water surface, detached droplets
+and slowly advected colour. It does not solve particle pressure throughout the
+water volume. The existing PBF scenes and ESP32 firmware remain separate.
 
 ## Try it
 
-With Emscripten and CMake installed (the same prerequisites as the other previews):
+With Emscripten and CMake installed:
 
 ```sh
 scripts/build_wasm.sh --surface
 scripts/serve.sh
 ```
 
-Open <http://localhost:8080/surface.html>. Use `?res=64` for six 64×64 faces per
-cube, or choose 8, 32 or 64 in the page. Pick a cube and drag, use the pitch/roll
-sliders, or click **Tip to pour**. **Shake** adds a slosh impulse. Turn transfer
-off to inspect a closed container at any angle. **Swap positions** demonstrates
-that routing follows cube identity, not world position. Both cubes are displayed
-with all six LED faces; the green +Y rim marks a *virtual* opening.
+Open <http://localhost:8080/surface.html?res=64>. Choose 8, 32 or 64 pixels per
+face without changing the simulation resolution. Rebuild the WASM after pulling
+changes; reload the browser page as well.
 
-The preview is a two-cube ring (1 → 2 → 1). The receiver's orientation controls
-its own water. A full receiver applies backpressure: the source retains any
-volume that cannot be accepted. Reset initializes 65% and 15%, so the conserved
-total is 80% of one cube's capacity. Pause freezes simulation; camera controls
-and shading remain available. Timings exclude WebGL and are browser timings,
-not measurements or predictions for ESP32-S3.
+- Pick a cube, then **drag/flick** or use pitch/roll. Rapid movement sheds droplets
+  from the intersections of the waterline with the walls/edges. Gentle tilts stay
+  calm. **Shake** adds an explicit impulse.
+- **Tip to pour** transfers water and the *local outlet colour* into the next cube.
+  Incoming colour enters a small region and is advected into plumes and curls;
+  the receiver is not recoloured by a global weighted average.
+- **Add blue ink / Add red ink** inject concentrated dye at the selected cube's
+  inlet without changing the water volume (an idealized trace-dye addition).
+- **Ink in clear water demo** resets the selected cube to 70% clear water, adds a
+  blue ink drop and disables transfer so its movement is easier to inspect.
+- **Reset colour** deliberately replaces the selected cube's entire colour field.
+  It also rejoins its airborne droplets while preserving its total water volume.
+- **Swap positions** demonstrates that routing follows identity, not world position.
+- **Reset pair** initializes cube 1 to 65% blue water and cube 2 to 35% red water.
+  Their initial combined amount is 100% of one cube's capacity.
 
-The particle links require their respective existing WASM builds:
-`scripts/build_wasm.sh` and `scripts/build_wasm.sh --beaker`.
+The preview is a two-cube ring (1 → 2 → 1). All six LED faces remain visible;
+its green +Y rim marks a virtual opening. A full receiver applies backpressure:
+water that cannot be accepted remains in the donor. The live total includes
+both bulk liquid and airborne droplets. Timings exclude WebGL and are browser
+measurements, not predictions for the S3.
 
-## Model and shader
+The particle preview links require the existing `scripts/build_wasm.sh` and
+`scripts/build_wasm.sh --beaker` builds, respectively.
 
-`core/include/partsim/SurfaceWater.h` and `core/src/SurfaceWater.cpp` contain the
-portable C++ implementation. `platform/wasm/surface_bindings.cpp` exports it as
-an independent WASM module; JS handles controls and displays the C++ pixels.
-There is no separate JavaScript physics model and no GPU-only water shader.
+## Implementation
 
-- **Volume:** one float in [0,1], independent of panel resolution. Coordinates
-  are the unit cube [-0.5,0.5]³.
-- **Surface:** a shared plane, `dot(up, position) = level`. Its normal follows
-  object-space gravity through a damped spring. Acceleration and explicit
-  impulses excite slosh. A deterministic antipodal nudge handles exact inversion.
-- **Level:** recalculated from volume and the current surface normal. Integrate
-  clipped affine column heights over a square analytically, then bisect the
-  plane offset 19 times. Integrating along the dominant normal component avoids
-  division by nearly zero components in axis-aligned poses. Tilt does not change
-  volume. This is bounded work per update, independent of LED count.
-- **Pour:** a stylized rate proportional to submerged rim head to the power 3/2.
-  The +Y opening's lowest edge controls the head. Only accepted volume is removed
-  from the donor. Incoming water excites the receiver's shading ripple oscillator.
-- **Shading:** each face uses the existing `Panel` basis. Every LED samples the
-  same surface in object coordinates, with an antialiased waterline, blue depth
-  ramp and shared polynomial lighting modes. Ripples currently modulate lighting,
-  not the surface geometry. There is no per-pixel neighbour search, square root,
-  trigonometric call or division. Output is RGBA into caller-owned storage.
+The browser displays pixels generated by portable C++, not a separate JS fluid
+model or GPU-only shader. Relevant files:
 
-The water object is 56 bytes on the tested host/WASM builds. An RGBA scratch
-face is 4,096 bytes at 32² or 16,384 bytes at 64² and can be reused face by face.
-HUB75 bitplane/DMA storage is additional. The browser holds all faces for both
-cubes to supply textures; an MCU does not need that browser allocation.
+| Component | Responsibility |
+|---|---|
+| `SurfaceWater.h/.cpp` | Conserved bulk volume, orientation-aware fill plane and damped slosh |
+| `DyeField.h/.cpp` | Shared 16³ red/blue concentration field, local injection and advection |
+| `WaterEffects.h/.cpp` | Droplets, local colour transfer and field/droplet rendering |
+| `platform/wasm/surface_bindings.cpp` | Small standalone WASM API for two cubes |
+| `platform/wasm/web/surface.html`, `surface.js` | Interactive controls and existing six-face viewer |
 
-## Validation and measurement
+### Surface
+
+Coordinates are the unit cube [-0.5,0.5]³. Volume is a fraction of capacity. The
+surface normal follows object-space gravity through a damped spring; motion
+excites slosh. An antipodal nudge handles exact inversion. The plane offset is
+solved from volume using analytic integration of clipped affine column heights
+and 19 bisection iterations. Rotating the plane cannot invent water volume.
+
+### Dye and slow mixing
+
+Two Q0.16 concentrations occupy a fixed 16³ grid. Six decaying vortices and an
+inlet jet create coherent circulation. They are excited by pouring, local ink
+injection and shaking. The field advances at 30 Hz, independently of face
+resolution and the surface/droplet cadence.
+
+First-order semi-Lagrangian advection proved too blurry in the visual comparison.
+The default therefore uses **limited MacCormack correction**: forward advection,
+a reverse sample to estimate error, and a correction clamped to old source-cell
+bounds. Three fixed buffers avoid update-order dependence. Higher precision
+retains faint concentrations during slow motion; the limiter prevents ringing
+and negative dye. A backtrace displacement cap limits jumps to 0.75 cell/update.
+
+Dry cells extend nearby liquid colour as a boundary condition and are excluded
+from rendering. All faces sample the same field. Rendering forms six 16²
+**maximum-intensity projections**, separately for red and blue, then bilinearly
+upsamples them and applies the high-resolution waterline. A concentration
+response boosts faint wisps. This is a deliberate LED visualization: ordinary
+front-to-back alpha compositing hid internal ink behind the surrounding red/blue
+liquid. It is not a photographic optical model or physically accurate pigment
+colour mixing. Two coloured regions can overlap in a projection without having
+mixed in the underlying 3D cells.
+
+The field is a qualitative model, **not a dye-mass-conserving solver**. Advection,
+clipping, injection and dry-cell extension can change integrated concentration.
+Water volume is accounted separately and conserved by transfers and droplets.
+
+### Droplets
+
+A fixed pool holds at most 32 droplets per cube, with position, velocity, colour,
+age and water volume. Rapid changes in gravity direction or explicit impulses
+spawn them at wet box-edge intersections. Each spawned droplet removes 0.025%
+of capacity from bulk water. They follow ballistic motion, rebound off the cube
+walls, and return their volume and local colour when they rejoin the water.
+
+Droplets are shaded as small projected footprints on the LED faces, not as
+extra objects outside the physical display. Capacity checks include the receiver's
+airborne volume, preventing overfill when its droplets later return. A lifetime
+limit returns a trapped droplet after 2.5 seconds. The aggregate rim-flow path
+handles inter-cube transfer; individual droplets do not themselves cross the radio.
+
+## Memory and timing
+
+Measured object size on the native/WASM build: **50,736 bytes per cube** (about
+49.5 KiB). Of that, 48 KiB is the three dye buffers. The minimal `SurfaceWater`
+object remains 56 bytes; firmware can still use it alone.
+
+The face compositor uses a 768-byte temporary projection. Caller-owned RGBA
+scratch adds 4,096 bytes at 32² or 16,384 bytes at 64² and can be reused across
+faces. HUB75 bitplane/DMA buffers, radio, stack and application memory are
+additional. The browser stores all twelve faces as textures; the MCU need not.
+
+`partsim_surface_bench` measures the full effects backend, with dye initially
+injected, and separates average simulation update time from six-face shading.
+Some updates contain a 30 Hz dye step and others do not; its average is **not a
+worst-case deadline budget**. Real S3 timings are still required before choosing
+field rate, colour depth and display-node count.
+
+## Validation
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 build/tests/partsim_tests surface_water
+build/tests/partsim_tests effects
+build/tests/partsim_tests dye_injection
 build/platform/host/partsim_surface_bench
 node scripts/check_surface.mjs
 ```
 
-Native tests cover known analytic cube cuts, monotonicity and symmetry,
-near-axis poses, fill preservation through arbitrary rotation, settling and
-exact inversion, transfer conservation, full-receiver backpressure and renderer
-buffer bounds at 8²/32²/64². The Node check exercises the actual WASM API,
-inversion/draining, conserved total and every face buffer at all three sizes.
-`partsim_surface_bench` separates one simulation update from six-face shading.
-Neither host nor WASM timing establishes the hardware frame rate.
+Tests cover analytic volume, tilt/inversion, localized dye injection and transport,
+uniform-field stability, concentration bounds, gentle versus fast motion,
+droplet detachment/rejoining, transfer conservation, receiver capacity including
+droplets, buffer guards, and visible droplet pixels above the waterline. The Node
+check exercises the actual WASM API at 8², 32² and 64². Browser checks cover ink,
+shake, pouring, pause/reset and preview rendering.
 
-## Integration boundary and remaining work
+## Remaining hardware work and visual limits
 
-This is a working host/browser prototype, **not yet the active ESP32 firmware
-backend**. The device application still instantiates its existing particle
-simulation. The next device work should be:
+This backend is still a **host/browser prototype**, not the active ESP32 firmware.
+Next integration steps:
 
-1. Add a dedicated surface role/environment that does not instantiate the PBF
-   pools. Feed `MotionSource::down()` into `step()`; convert container acceleration
-   into g before passing it. Use a fixed update cadence (start at 120 Hz, measure
-   whether 60 Hz suffices) and render independently at the selected display rate.
-2. Feed one face scratch buffer into panel mapping and the HUB75 blitter. Measure
-   step, shading, colour conversion and blit separately on S3; also measure actual
-   panel refresh. Tune colour depth and node count from those measurements.
-3. Define a versioned surface snapshot for display nodes. Transmit volume, normal,
-   level and shading phase/state, rather than particles or full images. Synchronize
-   snapshot application at frame boundaries. Do not send the native C++ object
-   layout as a wire format.
-4. Implement aggregate-volume radio transfers with stable source/session IDs,
-   sequence numbers, cumulative counters, duplicate rejection and periodic final
-   counter announcements. Define reset/reboot recovery and acknowledgements for
-   receiver capacity before removing source water. `pourTo()` is an in-process
-   reference, **not a reliable distributed protocol**.
-5. Tune the visible result on real panels before adding complexity: decorative
-   ballistic droplets, local receiving splashes, then a coarse dye field if needed.
+1. Add an effects environment that avoids instantiating the PBF pools. Feed
+   `MotionSource::down()` at a fixed cadence; map acceleration impulses to the
+   effects layer. Continuous gyroscope-driven yaw stirring is not implemented.
+2. Connect face scratch output to panel mapping/HUB75 blitting. Measure worst-case
+   dye steps, shading, colour conversion, DMA refresh and radio overhead on S3.
+3. Define versioned snapshots for display nodes. Dye needs a grid payload, whereas
+   the surface and droplets need only compact state. Do not serialize native C++
+   object layouts. Synchronize application of snapshots at frame boundaries.
+4. Replace the in-process transfer with aggregate-volume radio transactions using
+   source/session IDs, sequence numbers, cumulative counters and capacity handling.
+   Include reset/reboot recovery. The current preview is not a distributed protocol.
 
-Known simplifications: planar slosh (no breaking waves), stylized flow, no
-separate droplets, no volumetric dye/mixing and no transport delay. The two-cube
-preview applies transfers sequentially each fixed tick. Long browser stalls are
-discarded instead of catching up a large physical time interval. Float volume
-conservation has rounding error; a deployed network ledger should use integer
-volume units with fractional rate accumulation. Surface snapshots have not yet
-been checked for bit-identical host/WASM/S3 serialization.
+The free surface remains planar: droplets do not imply overturning waves or
+fluid sheets. A 16³ field yields broad curling plumes rather than the fine
+filaments in the photographic reference. Dye mixing and vortex motion are
+stylized; rendering is tuned for readable local colour on LEDs. Finite precision
+causes small water-volume rounding errors, and a network ledger should use
+integer volume units with fractional flow accumulation. Cross-target bit-identical
+serialization and hardware performance have not yet been established.

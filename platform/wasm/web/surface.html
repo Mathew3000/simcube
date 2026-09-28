@@ -19,6 +19,8 @@
     padding: 7px 10px; border-radius: 5px; font: inherit; cursor: pointer; }
   button:hover { background: #28485f; } input[type=range] { width: 100%; accent-color: #54cbe8; }
   .row { display: flex; gap: 7px; margin: 8px 0; flex-wrap: wrap; }
+  #telemetry { position: fixed; right: 22px; bottom: 58px; width: min(620px, calc(100vw - 330px)); background: #07111bd9; border: 1px solid #294258; border-radius: 8px; padding: 10px 16px; pointer-events: none; }
+  #telemetry p { margin: 3px 0; }
   #stats { font-variant-numeric: tabular-nums; border-top: 1px solid #294258; padding-top: 10px; }
   #error { position: fixed; z-index: 5; inset: 0; background: #101724; padding: 40px;
     white-space: pre-wrap; display: none; }
@@ -26,13 +28,14 @@
   @media (max-width: 650px) {
     #controls { top: 8px; left: 8px; width: 220px; max-height: 48vh; padding: 12px; }
     #hint { max-width: 180px; }
+    #telemetry { width: calc(100vw - 24px); right: 12px; bottom: 62px; }
   }
 </style>
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
 <body>
 <section id="controls">
-  <h1>Surface water</h1>
+  <h1>Water, ink & splashes</h1>
   <p>Lightweight C++ prototype · six LED faces<br>Fixed chain: cube 1 → 2 → 1</p>
   <label>Faces <select id="resolution"><option>8</option><option selected>32</option><option>64</option></select> × pixels</label>
   <label>Control <select id="selected"><option value="0">Cube 1</option><option value="1">Cube 2</option></select></label>
@@ -40,16 +43,24 @@
   <label>Pitch <output id="pitchValue">0°</output><input id="pitch" aria-label="Pitch" type="range" min="-180" max="180" value="0"></label>
   <label>Roll <output id="rollValue">0°</output><input id="roll" aria-label="Roll" type="range" min="-180" max="180" value="0"></label>
   <div class="row"><button id="upright">Upright</button><button id="tip">Tip to pour</button><button id="shake">Shake</button></div>
+  <p>Flick or shake to detach droplets from the waterline. Slow tilts stay calm.</p>
   <label><input type="checkbox" id="pouring" checked> Enable transfer</label>
   <label><input type="checkbox" id="bloom"> Bloom</label>
   <div class="row"><button id="pause">Pause</button><button id="reset">Reset pair</button><button id="swap">Swap positions</button></div>
-  <h2>Water volume</h2>
-  <p id="volumes">Loading…</p>
-  <p id="flow"></p>
-  <p id="stats">Loading the surface WASM module…</p>
+  <h2>Colour in selected cube</h2>
+  <div class="row"><button id="blueInk">Add blue ink</button><button id="redInk">Add red ink</button></div>
+  <div class="row"><select id="fillColour" aria-label="Base colour"><option value="0">Clear</option><option value="1">Blue</option><option value="2">Red</option></select><button id="recolour">Reset colour</button></div>
+  <button id="inkDemo">Ink in clear water demo</button>
+  <p>Ink stays local and curls as it moves. Reset colour deliberately replaces all colour in the selected cube.</p>
   <p>Green rim = virtual opening. Full receivers block transfer. Timings are for this browser, not an ESP32.</p>
   <a href="./index.html">Particle preview</a> · <a href="./beakers.html">Particle beakers</a>
 </section>
+<aside id="telemetry" aria-label="Live water statistics">
+  <p id="volumes">Loading…</p>
+  <p id="flow"></p>
+  <p id="drops"></p>
+  <p id="stats">Loading the surface WASM module…</p>
+</aside>
 <p id="hint">Drag to tilt the selected cube<br>Right-drag to orbit · scroll to zoom</p>
 <div id="error" role="alert"></div>
 <script type="module" src="./surface.js"></script>

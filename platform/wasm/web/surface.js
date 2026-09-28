@@ -55,6 +55,16 @@ for (const id of ['pitch', 'roll']) $(id).oninput = () => {
 $('upright').onclick = () => { poses[selected].set(0, 0, 0); poseChanged(); };
 $('tip').onclick = () => { poses[selected].set(0, 0, -2.15); poseChanged(); };
 $('shake').onclick = () => mod._sw_impulse(selected, 2.0, 0.2, 0.8);
+$('blueInk').onclick = () => mod._sw_ink(selected, 1);
+$('redInk').onclick = () => mod._sw_ink(selected, 0);
+$('recolour').onclick = () => mod._sw_colour(selected, Number($('fillColour').value));
+$('inkDemo').onclick = () => {
+  poses[selected].set(0,0,0); poseChanged();
+  mod._sw_fill(selected, 0.7);
+  mod._sw_colour(selected, 0);
+  mod._sw_ink(selected, 1);
+  $('pouring').checked = false;
+};
 $('bloom').onchange = () => { view.bloomPass.enabled = $('bloom').checked; };
 $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; };
 $('reset').onclick = () => {
@@ -128,7 +138,8 @@ function animate(now) {
     const v0 = mod._sw_volume(0), v1 = mod._sw_volume(1);
     $('volumes').textContent = `Cube 1: ${(v0*100).toFixed(1)}% · Cube 2: ${(v1*100).toFixed(1)}% · Total: ${((v0+v1)*100).toFixed(2)}% of one cube`;
     $('flow').textContent = `Flow 1→2: ${(mod._sw_flow(0)*100).toFixed(1)}%/s · 2→1: ${(mod._sw_flow(1)*100).toFixed(1)}%/s`;
-    $('stats').textContent = `${res}×${res} × 6 faces/cube · ${mod._sw_state_bytes()} B water state/cube · simulation ${simMs.toFixed(2)} ms · shading ${shadeMs.toFixed(2)} ms (both cubes; excludes WebGL)`;
+    $('drops').textContent = `Detached droplets: ${mod._sw_droplets(0)} + ${mod._sw_droplets(1)} (included in total volume)`;
+    $('stats').textContent = `${res}×${res} × 6 faces/cube · 16³ dye grid · ${(mod._sw_state_bytes()/1024).toFixed(1)} KiB state/cube · simulation ${simMs.toFixed(2)} ms · shading ${shadeMs.toFixed(2)} ms (both cubes; excludes WebGL)`;
     lastHud = now;
   }
   requestAnimationFrame(animate);

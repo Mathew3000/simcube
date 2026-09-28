@@ -1,9 +1,9 @@
-#include "partsim/SurfaceWater.h"
+#include "partsim/WaterEffects.h"
 #include <cstdint>
 
 namespace {
 using namespace partsim;
-SurfaceWater water[2];
+WaterEffects water[2];
 Geometry geometry;
 Vec3 down[2] = {{0,-1,0}, {0,-1,0}};
 uint8_t pixels[2][6][64*64*4];
@@ -22,7 +22,7 @@ int sw_init(int res) {
   if (geometry.count() != 6) return 0;
   resolution = res;
   for (int i = 0; i < 2; ++i) {
-    water[i].reset(i == 0 ? 0.65f : 0.15f);
+    water[i].reset(i == 0 ? 0.65f : 0.35f, i == 0 ? DyeSample{0,0.9f} : DyeSample{0.9f,0});
     down[i] = {0,-1,0};
     flow[i] = 0;
   }
@@ -45,10 +45,16 @@ void sw_orient(int i, float x, float y, float z, float w) {
 void sw_impulse(int i, float x, float y, float z) {
   if (valid(i)) water[i].impulse({x,y,z});
 }
-void sw_fill(int i, float v) { if (valid(i)) water[i].setVolume(v); }
+void sw_fill(int i, float v) { if (valid(i)) water[i].reset(v, {0,0.9f}); }
 float sw_volume(int i) { return valid(i) ? water[i].volume() : 0; }
 float sw_flow(int i) { return valid(i) ? flow[i] : 0; }
-int sw_state_bytes() { return (int)sizeof(SurfaceWater); }
+int sw_droplets(int i) { return valid(i) ? water[i].dropletCount() : 0; }
+void sw_ink(int i, int blue) { if (valid(i)) water[i].addInk(blue ? DyeSample{0,1} : DyeSample{1,0}); }
+void sw_colour(int i, int colour) {
+  if (valid(i)) water[i].reset(water[i].volume(), colour == 0 ? DyeSample{0,0} :
+                            (colour == 1 ? DyeSample{0,0.9f} : DyeSample{0.9f,0}));
+}
+int sw_state_bytes() { return (int)sizeof(WaterEffects); }
 void sw_step(float dt, int pouring) {
   if (!(dt > 0)) return;
   dt = pmin(dt, 0.1f);

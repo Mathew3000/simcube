@@ -16,7 +16,8 @@ implementation, three build targets — what you see in the browser is what the 
 ## Status
 
 **Experimental lightweight water:** the `feature/lightweight-water` branch adds
-a portable surface/slosh backend and a two-cube pouring preview at 8×8, 32×32
+a portable surface/slosh backend with movement-driven droplets, local 3D dye
+advection and a two-cube pouring preview at 8×8, 32×32
 or 64×64 per face. Run `scripts/build_wasm.sh --surface`, then
 `scripts/serve.sh` and open `/surface.html`. See
 [Surface water prototype](docs/SURFACE-WATER.md) for the model, tests and remaining

@@ -1,4 +1,4 @@
-#include "partsim/SurfaceWater.h"
+#include "partsim/WaterEffects.h"
 #include <chrono>
 #include <cstdio>
 
@@ -13,16 +13,17 @@ double milliseconds(Clock::time_point begin) {
 }
 
 int main() {
-  std::printf("SurfaceWater state: %zu bytes (excludes caller-owned pixel buffers)\n",
-              sizeof(SurfaceWater));
+  std::printf("WaterEffects state: %zu bytes (excludes caller-owned pixel buffers)\n",
+              sizeof(WaterEffects));
   std::puts("Host timings only; these are NOT ESP32 predictions.");
   const int resolutions[] = {8,32,64};
   for (int res : resolutions) {
     if (res*res > kMaxPanelTexels) continue;
     const Geometry g = Geometry::cube(res, 32.0f/(float)res);
-    SurfaceWater water;
-    water.reset(0.55f);
-    constexpr int steps = 3000;
+    WaterEffects water;
+    water.reset(0.55f, {0.9f,0});
+    water.addInk({0,1});
+    constexpr int steps = 600;
     auto start = Clock::now();
     for (int i = 0; i < steps; ++i) {
       const float t = (float)i*0.01f;
