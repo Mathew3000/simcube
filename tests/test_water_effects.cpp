@@ -179,3 +179,19 @@ TEST(effects_sloshing_accelerates_mixing_without_requiring_splashes) {
   CHECK_NEAR(still.volume(),0.7f,1e-6f);
   CHECK_NEAR(moving.volume(),0.7f,1e-6f);
 }
+
+TEST(dye_rgb_channels_follow_identical_transport_and_diffusion) {
+  SurfaceWater water; water.reset(0.7f);
+  DyeField dye; dye.reset({0,0,0});
+  dye.inject({0,-0.1f,0},{0.6f,0.6f,0.6f},0.02f);
+  dye.stir({0,-0.1f,0},{0,-1,0},3);
+  for (int i = 0; i < 90; ++i) dye.step(1.0f/30.0f,water,{0.1f,0,0},0.5f);
+  float peak = 0;
+  for (int z = 0; z < 16; ++z) for (int y = 0; y < 16; ++y) for (int x = 0; x < 16; ++x) {
+    const auto d = dye.cell(x,y,z);
+    CHECK_NEAR(d.red,d.green,1e-6f);
+    CHECK_NEAR(d.blue,d.green,1e-6f);
+    peak = pmax(peak,d.green);
+  }
+  CHECK(peak > 0.001f);
+}

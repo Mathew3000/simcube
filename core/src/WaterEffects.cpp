@@ -181,22 +181,22 @@ void WaterEffects::renderPanel(const Panel& panel, float cubeSide, uint8_t* rgba
   const Vec3 cv = panel.v*((float)panel.h*invSide/size);
   for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x) {
     Vec3 p = corner+cu*((float)x+0.5f)+cv*((float)y+0.5f)+panel.n*(0.5f/size);
-    float red = 0.0f, blue = 0.0f;
+    float red = 0.0f, blue = 0.0f, green = 0.0f;
     for (int z = 0; z < size; ++z, p += panel.n*(1.0f/size)) {
       if (surface_.depth(p) < 0) continue;
       const DyeSample d = dye_.cell((int)((p.x+0.5f)*size),(int)((p.y+0.5f)*size),
                                     (int)((p.z+0.5f)*size));
       // Maximum-intensity projection exposes internal wisps on opaque LEDs.
       // Front-to-back alpha compositing hid them behind the uniformly dyed
-      // foreground. Both channels still come from the same evolving 3D field.
-      red = pmax(red,d.red); blue = pmax(blue,d.blue);
+      // foreground. All channels still come from the same evolving 3D field.
+      red = pmax(red,d.red); blue = pmax(blue,d.blue); green = pmax(green,d.green);
     }
-    const float sum = red+blue;
+    const float sum = pmax(red,pmax(green,blue));
     const float opacity = sum/(0.12f+sum);
     const float inv = sum > 1e-6f ? 1.0f/sum : 0.0f;
-    const float r = (red*235.0f+blue*8.0f)*inv;
-    const float g = (red*18.0f+blue*30.0f)*inv;
-    const float b = (red*42.0f+blue*205.0f)*inv;
+    const float r = red*235.0f*inv;
+    const float g = green*235.0f*inv;
+    const float b = blue*235.0f*inv;
     projection[y*size+x][0] = toByte(r*opacity+42.0f*(1.0f-opacity));
     projection[y*size+x][1] = toByte(g*opacity+57.0f*(1.0f-opacity));
     projection[y*size+x][2] = toByte(b*opacity+68.0f*(1.0f-opacity));
@@ -243,7 +243,7 @@ void WaterEffects::renderPanel(const Panel& panel, float cubeSide, uint8_t* rgba
       const float dx = (float)x+0.5f-q.s, dy = (float)y+0.5f-q.t;
       const float a = pclamp(1.4f-(dx*dx+dy*dy)*invR2,0.0f,1.0f)*fade;
       const float colour[] = {45.0f+d.dye.red*200.0f+d.dye.blue*20.0f,
-                              100.0f+d.dye.blue*40.0f,140.0f+d.dye.blue*110.0f};
+                              45.0f+d.dye.green*200.0f,140.0f+d.dye.blue*110.0f};
       const int k = (y*(int)panel.w+x)*4;
       for (int c = 0; c < 3; ++c) rgba[k+c] = toByte((float)rgba[k+c]*(1.0f-a)+colour[c]*a);
     }

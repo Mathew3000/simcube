@@ -26,6 +26,10 @@ changes; reload the browser page as well.
 - **Tip to pour** transfers water and the *local outlet colour* into the next cube.
   Incoming colour enters a small region and is advected into plumes and curls;
   the receiver is not recoloured by a global weighted average.
+- The colour picker beside **Add ink** injects any RGB colour locally.
+  **Reset colour** applies that colour throughout the selected cube.
+  **Clear water** removes its dye. Black represents zero dye (clear), not opaque
+  black pigment; mixing remains an RGB visual approximation.
 - **Add blue ink / Add red ink** inject concentrated dye at the selected cube's
   inlet without changing the water volume (an idealized trace-dye addition).
 - **Ink in clear water demo** resets the selected cube to 70% clear water, adds a
@@ -33,8 +37,7 @@ changes; reload the browser page as well.
 - **Reset colour** deliberately replaces the selected cube's entire colour field.
   It also rejoins its airborne droplets while preserving its total water volume.
 - **Swap positions** demonstrates that routing follows identity, not world position.
-- **Initial water** sets each cube's starting fill (0–100%) and colour (clear,
-  blue or red). Changes take effect when you press **Reset pair**, which also
+- **Initial water** sets each cube's starting fill (0–100%) and colour (RGB picker with colour presets, or clear water). Changes take effect when you press **Reset pair**, which also
   returns both cubes upright and clears droplets, flow and dye motion. Defaults
   are 65% blue in cube 1 and 35% red in cube 2. Settings follow cube identity
   when positions are swapped; Reset keeps the current pause/transfer settings.
@@ -56,7 +59,7 @@ model or GPU-only shader. Relevant files:
 | Component | Responsibility |
 |---|---|
 | `SurfaceWater.h/.cpp` | Conserved bulk volume, orientation-aware fill plane and damped slosh |
-| `DyeField.h/.cpp` | Shared 16³ red/blue concentration field, local injection, advection and diffusion |
+| `DyeField.h/.cpp` | Shared 16³ RGB concentration field, local injection, advection and diffusion |
 | `WaterEffects.h/.cpp` | Droplets, local colour transfer and field/droplet rendering |
 | `platform/wasm/surface_bindings.cpp` | Small standalone WASM API for two cubes |
 | `platform/wasm/web/surface.html`, `surface.js` | Interactive controls and existing six-face viewer |
@@ -71,7 +74,7 @@ and 19 bisection iterations. Rotating the plane cannot invent water volume.
 
 ### Dye and slow mixing
 
-Two Q0.16 concentrations occupy a fixed 16³ grid. Six decaying vortices and an
+Three Q0.16 colour channels occupy a fixed 16³ grid. Six decaying vortices and an
 inlet jet create coherent circulation. They are excited by pouring, local ink
 injection and shaking. The field advances at 30 Hz, independently of face
 resolution and the surface/droplet cadence.
@@ -90,7 +93,7 @@ agitation. Angular travel and acceleration impulses build an agitation envelope
 that decays with a roughly two-second time constant. Gentle tilting also drives
 circulation, without needing to cross the droplet-spawning threshold.
 
-An 8 KiB signed fractional-remainder buffer accumulates diffusion changes smaller
+A 12 KiB signed fractional-remainder buffer accumulates diffusion changes smaller
 than one Q0.16 unit, preventing persistent rounding stalls. Once a channel's
 entire wet-field range is at most 64/65535 (0.1% concentration), it finishes at
 its rounded wet-cell mean, including dry ghost cells. This last, visually tiny
@@ -100,7 +103,7 @@ fixed timer; new ink starts another local plume after a completed mix.
 
 Dry cells extend nearby liquid colour as a boundary condition and are excluded
 from rendering. All faces sample the same field. Rendering forms six 16²
-**maximum-intensity projections**, separately for red and blue, then bilinearly
+**maximum-intensity projections**, separately for red, green and blue, then bilinearly
 upsamples them and applies the high-resolution waterline. A concentration
 response boosts faint wisps. This is a deliberate LED visualization: ordinary
 front-to-back alpha compositing hid internal ink behind the surrounding red/blue
@@ -128,8 +131,8 @@ handles inter-cube transfer; individual droplets do not themselves cross the rad
 
 ## Memory and timing
 
-Measured object size on the native/WASM build: **58,932 bytes per cube** (about
-57.6 KiB). Of that, 48 KiB is the three dye buffers and 8 KiB holds diffusion
+Measured object size on the native/WASM build: **87,732 bytes per cube** (about
+85.7 KiB). Of that, 72 KiB is the three dye buffers and 12 KiB holds diffusion
 remainders. The minimal `SurfaceWater`
 object remains 56 bytes; firmware can still use it alone.
 

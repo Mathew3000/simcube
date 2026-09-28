@@ -57,7 +57,13 @@ $('tip').onclick = () => { poses[selected].set(0, 0, -2.15); poseChanged(); };
 $('shake').onclick = () => mod._sw_impulse(selected, 2.0, 0.2, 0.8);
 $('blueInk').onclick = () => mod._sw_ink(selected, 1);
 $('redInk').onclick = () => mod._sw_ink(selected, 0);
-$('recolour').onclick = () => mod._sw_colour(selected, Number($('fillColour').value));
+function rgb(id) {
+  const hex = $(id).value;
+  return [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset+2), 16)/255);
+}
+$('recolour').onclick = () => mod._sw_rgb(selected, ...rgb('fillColour'));
+$('customInk').onclick = () => mod._sw_ink_rgb(selected, ...rgb('fillColour'));
+$('clearColour').onclick = () => mod._sw_colour(selected, 0);
 $('inkDemo').onclick = () => {
   poses[selected].set(0,0,0); poseChanged();
   mod._sw_fill(selected, 0.7);
@@ -77,7 +83,8 @@ $('reset').onclick = () => {
   mod._sw_init(res);
   for (let i = 0; i < 2; ++i) {
     mod._sw_fill(i, Number($(`initialFill${i}`).value)/100);
-    mod._sw_colour(i, Number($(`initialColour${i}`).value));
+    if ($(`initialClear${i}`).checked) mod._sw_colour(i, 0);
+    else mod._sw_rgb(i, ...rgb(`initialColour${i}`));
     poses[i].set(0,0,0);
     view.beakers[i].body.quaternion.identity();
   }

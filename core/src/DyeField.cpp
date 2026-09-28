@@ -11,9 +11,9 @@ Vec3 inside(Vec3 p) {
 }
 
 void DyeField::reset(DyeSample colour) {
-  const uint16_t r = pack(colour.red), b = pack(colour.blue);
-  for (auto& buffer : grid_) for (auto& c : buffer) { c[0] = r; c[1] = b; }
-  for (auto& r : diffusionRemainder_) r[0] = r[1] = 0;
+  const uint16_t r = pack(colour.red), b = pack(colour.blue), g = pack(colour.green);
+  for (auto& buffer : grid_) for (auto& c : buffer) { c[0] = r; c[1] = b; c[2] = g; }
+  for (auto& r : diffusionRemainder_) r[0] = r[1] = r[2] = 0;
   for (auto& v : vortices_) v.strength = 0.0f;
   front_ = nextVortex_ = 0;
   jet_ = 0.0f;
@@ -22,7 +22,7 @@ void DyeField::reset(DyeSample colour) {
 DyeSample DyeField::cell(int x, int y, int z) const {
   const auto& c = grid_[front_][index(iclamp(x,0,kSize-1), iclamp(y,0,kSize-1),
                                    iclamp(z,0,kSize-1))];
-  return {c[0]*(1.0f/65535.0f), c[1]*(1.0f/65535.0f)};
+  return {c[0]*(1.0f/65535.0f), c[1]*(1.0f/65535.0f), c[2]*(1.0f/65535.0f)};
 }
 
 DyeSample DyeField::sample(Vec3 p) const { return sampleBuffer(front_,p); }
@@ -38,9 +38,9 @@ DyeSample DyeField::sampleBuffer(int buffer, Vec3 p) const {
     for (int dx = 0; dx < 2; ++dx) {
       const float w = (dx ? tx : 1.0f-tx)*(dy ? ty : 1.0f-ty)*(dz ? tz : 1.0f-tz);
       const auto& c = grid_[buffer][index(x+dx,y+dy,z+dz)];
-      result.red += w*(float)c[0]; result.blue += w*(float)c[1];
+      result.red += w*(float)c[0]; result.blue += w*(float)c[1]; result.green += w*(float)c[2];
     }
-  result.red *= 1.0f/65535.0f; result.blue *= 1.0f/65535.0f;
+  result.red *= 1.0f/65535.0f; result.blue *= 1.0f/65535.0f; result.green *= 1.0f/65535.0f;
   return result;
 }
 
@@ -62,9 +62,10 @@ void DyeField::inject(Vec3 position, DyeSample colour, float amount, float radiu
       const float t = pmax(0.0f,1.0f-length2(p-position)*invR2);
       const float a = strength*t*t;
       auto& c = grid_[front_][index(x,y,z)];
-      if (a > 0) diffusionRemainder_[index(x,y,z)][0] = diffusionRemainder_[index(x,y,z)][1] = 0;
+      if (a > 0) diffusionRemainder_[index(x,y,z)][0] = diffusionRemainder_[index(x,y,z)][1] = diffusionRemainder_[index(x,y,z)][2] = 0;
       c[0] = pack((float)c[0]*(1.0f/65535.0f)*(1.0f-a)+colour.red*a);
       c[1] = pack((float)c[1]*(1.0f/65535.0f)*(1.0f-a)+colour.blue*a);
+      c[2] = pack((float)c[2]*(1.0f/65535.0f)*(1.0f-a)+colour.green*a);
     }
 }
 
@@ -101,7 +102,7 @@ Vec3 DyeField::displacement(Vec3 p, float dt, Vec3 down, Vec3 bulkVelocity) cons
   // This helper is evaluated at cell centres in both advection passes.
   const DyeSample dye = cell((int)((p.x+0.5f)*kSize),(int)((p.y+0.5f)*kSize),
                             (int)((p.z+0.5f)*kSize));
-  velocity += down*((dye.red+dye.blue)*0.008f);
+  velocity += down*(pmin(1.0f,dye.red+dye.blue+dye.green)*0.008f);
   Vec3 displacement = velocity*dt;
   const float maxD = pmax(pabs(displacement.x),pmax(pabs(displacement.y),pabs(displacement.z)));
   if (maxD > 0.75f/kSize) displacement *= (0.75f/kSize)/maxD;
@@ -133,6 +134,7 @@ void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, floa
       const DyeSample d = sample(source);
       grid_[back][index(x,y,z)][0] = pack(d.red);
       grid_[back][index(x,y,z)][1] = pack(d.blue);
+      grid_[back][index(x,y,z)][2] = pack(d.green);
     }
   // Limited MacCormack correction removes much of first-order advection's
   // numerical blur. Three fixed buffers keep both passes independent of cell
@@ -145,6 +147,7 @@ void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, floa
       if (water.depth(p) < 0) {
         grid_[corrected][idx][0] = grid_[back][idx][0];
         grid_[corrected][idx][1] = grid_[back][idx][1];
+        grid_[corrected][idx][2] = grid_[back][idx][2];
         continue;
       }
       const Vec3 delta = displacement(p,dt,down,bulkVelocity);
@@ -152,11 +155,11 @@ void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, floa
       if (water.depth(source) < 0)
         source = inside(source+down*(-water.depth(source)+0.005f));
       const DyeSample reverse = sampleBuffer(back,inside(p+delta));
-      const float reverseChannels[] = {reverse.red,reverse.blue};
+      const float reverseChannels[] = {reverse.red,reverse.blue,reverse.green};
       const int sx = iclamp((int)((source.x+0.5f)*kSize-0.5f),0,kSize-2);
       const int sy = iclamp((int)((source.y+0.5f)*kSize-0.5f),0,kSize-2);
       const int sz = iclamp((int)((source.z+0.5f)*kSize-0.5f),0,kSize-2);
-      for (int c = 0; c < 2; ++c) {
+      for (int c = 0; c < 3; ++c) {
         uint16_t lo = 65535, hi = 0;
         for (int dz = 0; dz < 2; ++dz) for (int dy = 0; dy < 2; ++dy)
           for (int dx = 0; dx < 2; ++dx) {
@@ -186,8 +189,8 @@ void DyeField::diffuse(float dt, const SurfaceWater& water, float agitation) {
   const Vec3 up = water.up();
   const float strideDepth[] = {-up.x/kSize,-up.y/kSize,-up.z/kSize};
   const int strides[] = {1,kSize,kSize*kSize};
-  uint32_t sum[2] = {};
-  uint16_t lo[2] = {65535,65535}, hi[2] = {};
+  uint32_t sum[3] = {};
+  uint16_t lo[3] = {65535,65535,65535}, hi[3] = {};
   int count = 0;
   for (int z = 0; z < kSize; ++z) for (int y = 0; y < kSize; ++y)
     for (int x = 0; x < kSize; ++x) {
@@ -198,20 +201,20 @@ void DyeField::diffuse(float dt, const SurfaceWater& water, float agitation) {
       const auto& old = grid_[front_][idx];
       auto& next = grid_[back][idx];
       if (depth < 0) {
-        next[0] = old[0]; next[1] = old[1];
-        diffusionRemainder_[idx][0] = diffusionRemainder_[idx][1] = 0;
+        next[0] = old[0]; next[1] = old[1]; next[2] = old[2];
+        diffusionRemainder_[idx][0] = diffusionRemainder_[idx][1] = diffusionRemainder_[idx][2] = 0;
         continue;
       }
-      int laplacian[2] = {};
+      int laplacian[3] = {};
       const int coords[] = {x,y,z};
       for (int axis = 0; axis < 3; ++axis) for (int sign = -1; sign <= 1; sign += 2) {
         if (coords[axis]+sign < 0 || coords[axis]+sign >= kSize ||
             depth+(float)sign*strideDepth[axis] < 0) continue;
         const auto& neighbour = grid_[front_][idx+sign*strides[axis]];
-        for (int c = 0; c < 2; ++c) laplacian[c] += (int)neighbour[c]-(int)old[c];
+        for (int c = 0; c < 3; ++c) laplacian[c] += (int)neighbour[c]-(int)old[c];
       }
       ++count;
-      for (int c = 0; c < 2; ++c) {
+      for (int c = 0; c < 3; ++c) {
         const float value = pclamp((float)old[c]+lambda*(float)laplacian[c]+
                             (float)diffusionRemainder_[idx][c]*(1.0f/128.0f),0.0f,65535.0f);
         next[c] = (uint16_t)(value+0.5f);
@@ -226,7 +229,7 @@ void DyeField::diffuse(float dt, const SurfaceWater& water, float agitation) {
   if (!count) return;
   // Finish below 0.1% concentration contrast. This removes the final integer
   // precision floor, per channel, without averaging visible unmixed plumes.
-  for (int c = 0; c < 2; ++c) if ((int)hi[c]-(int)lo[c] <= 64) {
+  for (int c = 0; c < 3; ++c) if ((int)hi[c]-(int)lo[c] <= 64) {
     const uint16_t mean = (uint16_t)((sum[c]+(uint32_t)count/2u)/(uint32_t)count);
     for (int i = 0; i < kCells; ++i) {
       grid_[front_][i][c] = mean;

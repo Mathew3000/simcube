@@ -54,6 +54,13 @@ void sw_colour(int i, int colour) {
   if (valid(i)) water[i].reset(water[i].volume(), colour == 0 ? DyeSample{0,0} :
                             (colour == 1 ? DyeSample{0,0.9f} : DyeSample{0.9f,0}));
 }
+// RGB picker channels are 0..1; retain the historical red/blue helpers.
+void sw_rgb(int i, float r, float g, float b) {
+  if (valid(i)) water[i].reset(water[i].volume(), {pclamp(r,0.0f,1.0f),pclamp(b,0.0f,1.0f),pclamp(g,0.0f,1.0f)});
+}
+void sw_ink_rgb(int i, float r, float g, float b) {
+  if (valid(i)) water[i].addInk({pclamp(r,0.0f,1.0f),pclamp(b,0.0f,1.0f),pclamp(g,0.0f,1.0f)});
+}
 int sw_state_bytes() { return (int)sizeof(WaterEffects); }
 void sw_step(float dt, int pouring) {
   if (!(dt > 0)) return;

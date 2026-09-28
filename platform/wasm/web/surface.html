@@ -20,6 +20,7 @@
   button:hover { background: #28485f; } input[type=range] { width: 100%; accent-color: #54cbe8; }
   fieldset { margin: 8px 0; padding: 6px 10px; border: 1px solid #294258; border-radius: 6px; }
   legend { padding: 0 5px; }
+  input[type=color] { width: 52px; height: 34px; padding: 2px; vertical-align: middle; background: #1a3044; border: 1px solid #365870; border-radius: 5px; }
   .row { display: flex; gap: 7px; margin: 8px 0; flex-wrap: wrap; }
   #telemetry { position: fixed; right: 22px; bottom: 58px; width: min(620px, calc(100vw - 330px)); background: #07111bd9; border: 1px solid #294258; border-radius: 8px; padding: 10px 16px; pointer-events: none; }
   #telemetry p { margin: 3px 0; }
@@ -36,6 +37,7 @@
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>
 </head>
 <body>
+<datalist id="dyeColours"><option value="#ff0000"><option value="#00ff00"><option value="#0000ff"><option value="#ffff00"><option value="#00ffff"><option value="#ff00ff"><option value="#ff8000"><option value="#8000ff"><option value="#ffffff"></datalist>
 <section id="controls">
   <h1>Water, ink & splashes</h1>
   <p>Lightweight C++ prototype · six LED faces<br>Fixed chain: cube 1 → 2 → 1</p>
@@ -54,21 +56,23 @@
     <legend>Cube 1</legend>
     <label for="initialFill0">Fill <output id="initialFillValue0" for="initialFill0">65%</output></label>
     <input id="initialFill0" type="range" min="0" max="100" step="1" value="65">
-    <label>Colour <select id="initialColour0" aria-label="Cube 1 initial colour"><option value="0">Clear</option><option value="1" selected>Blue</option><option value="2">Red</option></select></label>
+    <label>Colour <input id="initialColour0" aria-label="Cube 1 initial colour" type="color" value="#0000ff" list="dyeColours"></label>
+    <label><input id="initialClear0" type="checkbox"> Clear water</label>
   </fieldset>
   <fieldset>
     <legend>Cube 2</legend>
     <label for="initialFill1">Fill <output id="initialFillValue1" for="initialFill1">35%</output></label>
     <input id="initialFill1" type="range" min="0" max="100" step="1" value="35">
-    <label>Colour <select id="initialColour1" aria-label="Cube 2 initial colour"><option value="0">Clear</option><option value="1">Blue</option><option value="2" selected>Red</option></select></label>
+    <label>Colour <input id="initialColour1" aria-label="Cube 2 initial colour" type="color" value="#ff0000" list="dyeColours"></label>
+    <label><input id="initialClear1" type="checkbox"> Clear water</label>
   </fieldset>
   <button id="reset">Reset pair</button>
   <p>Reset applies these settings to each cube and returns both upright.</p>
   <h2>Colour in selected cube</h2>
   <div class="row"><button id="blueInk">Add blue ink</button><button id="redInk">Add red ink</button></div>
-  <div class="row"><select id="fillColour" aria-label="Base colour"><option value="0">Clear</option><option value="1">Blue</option><option value="2">Red</option></select><button id="recolour">Reset colour</button></div>
+  <div class="row"><input id="fillColour" aria-label="Dye colour" type="color" value="#00ff00" list="dyeColours"><button id="customInk">Add ink</button><button id="recolour">Reset colour</button><button id="clearColour">Clear water</button></div>
   <button id="inkDemo">Ink in clear water demo</button>
-  <p>Ink stays local and curls as it moves. Reset colour deliberately replaces all colour in the selected cube.</p>
+  <p>Ink stays local and curls as it moves. Reset colour deliberately replaces all colour in the selected cube. Black means clear (no dye).</p>
   <p>Green rim = virtual opening. Full receivers block transfer. Timings are for this browser, not an ESP32.</p>
   <a href="./index.html">Particle preview</a> · <a href="./beakers.html">Particle beakers</a>
 </section>
