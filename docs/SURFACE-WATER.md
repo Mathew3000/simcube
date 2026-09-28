@@ -103,13 +103,20 @@ fixed timer; new ink starts another local plume after a completed mix.
 
 Dry cells extend nearby liquid colour as a boundary condition and are excluded
 from rendering. All faces sample the same field. Rendering forms six 16²
-**maximum-intensity projections**, separately for red, green and blue, then bilinearly
-upsamples them and applies the high-resolution waterline. A concentration
-response boosts faint wisps. This is a deliberate LED visualization: ordinary
-front-to-back alpha compositing hid internal ink behind the surrounding red/blue
-liquid. It is not a photographic optical model or physically accurate pigment
-colour mixing. Two coloured regions can overlap in a projection without having
-mixed in the underlying 3D cells.
+projections, selecting a **complete RGB sample** with the strongest contrast to
+the wet-field mean along each ray. This exposes internal plumes on opaque LEDs
+without combining unrelated red, green and blue maxima at different depths.
+The selected colour is bilinearly upsampled and the high-resolution waterline is
+applied. Actual mixed cells still display their mixed colour; neighbouring LED
+pixels soften the visible boundary. This contrast projection is a stylized
+visualization, not a photographic optical model or pigment simulation.
+
+Incoming poured liquid accumulates a small dye budget (0.1% of cube capacity)
+before depositing a resolved parcel. Its core replaces receiving dye with the
+local outlet colour; a thin boundary blends with neighbouring liquid. Diffusion
+then works inward and sloshing accelerates mixing as before. Water volume moves
+immediately; the dye budget only delays sub-grid colour updates. A final inflow
+smaller than one parcel stays pending until more arrives or the cube is reset.
 
 The field is a qualitative model, **not a dye-mass-conserving solver**. Advection,
 clipping, injection and dry-cell extension can change integrated concentration.
@@ -131,7 +138,7 @@ handles inter-cube transfer; individual droplets do not themselves cross the rad
 
 ## Memory and timing
 
-Measured object size on the native/WASM build: **87,732 bytes per cube** (about
+Measured object size on the native/WASM build: **87,748 bytes per cube** (about
 85.7 KiB). Of that, 72 KiB is the three dye buffers and 12 KiB holds diffusion
 remainders. The minimal `SurfaceWater`
 object remains 56 bytes; firmware can still use it alone.
@@ -162,6 +169,7 @@ node scripts/check_surface.mjs
 Tests cover analytic volume, tilt/inversion, localized dye injection and transport,
 uniform-field stability, complete resting-water homogenization, faster mixing
 under gentle sloshing, concentration bounds, gentle versus fast motion,
+source-coloured poured cores and matching rendered pixels,
 droplet detachment/rejoining, transfer conservation, receiver capacity including
 droplets, buffer guards, and visible droplet pixels above the waterline. The Node
 check exercises the actual WASM API at 8², 32² and 64². Browser checks cover ink,

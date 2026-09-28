@@ -195,3 +195,36 @@ TEST(dye_rgb_channels_follow_identical_transport_and_diffusion) {
   }
   CHECK(peak > 0.001f);
 }
+
+TEST(effects_poured_swirl_retains_source_core_in_field_and_pixels) {
+  WaterEffects donor, receiver;
+  donor.reset(0.65f,{0,0.9f}); receiver.reset(0.35f,{0.9f,0});
+  // Establish a pouring pose without agitating the receiving liquid.
+  for (int i = 0; i < 120; ++i) donor.step(1.0f/120.0f,{1,0,0});
+  for (int i = 0; i < 12; ++i) {
+    donor.pourTo(receiver,1.0f/120.0f);
+    receiver.step(1.0f/120.0f,{0,-1,0});
+  }
+  int blueCore = 0, redBulk = 0, mixedEdge = 0;
+  for (int z = 0; z < 16; ++z) for (int y = 0; y < 16; ++y) for (int x = 0; x < 16; ++x) {
+    const Vec3 p{((float)x+0.5f)/16-0.5f,((float)y+0.5f)/16-0.5f,((float)z+0.5f)/16-0.5f};
+    if (receiver.surface().depth(p) < 0) continue;
+    const auto d = receiver.dye().cell(x,y,z);
+    if (d.blue > 0.8f && d.red < 0.1f) ++blueCore;
+    if (d.red > 0.8f && d.blue < 0.1f) ++redBulk;
+    if (d.red > 0.15f && d.blue > 0.15f) ++mixedEdge;
+  }
+  CHECK(blueCore > 0 && redBulk > 0 && mixedEdge > 0);
+  // Red foreground/background must not turn that blue core purple in the
+  // face projection. Only underlying local mixtures should become purple.
+  const auto geometry = Geometry::cube(32,1.0f);
+  uint8_t pixels[32*32*4];
+  int bluePixels = 0;
+  for (int face = 0; face < 6; ++face) {
+    receiver.renderPanel(geometry.at(face),32,pixels);
+    for (int i = 0; i < 32*32; ++i)
+      if (pixels[4*i+2] > 160 && pixels[4*i] < 70) ++bluePixels;
+  }
+  CHECK(bluePixels > 0);
+  CHECK_NEAR(donor.volume()+receiver.volume(),1.0f,5e-6f);
+}

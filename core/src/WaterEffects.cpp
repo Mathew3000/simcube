@@ -16,7 +16,7 @@ void WaterEffects::reset(float volume, DyeSample colour) {
   surface_.reset(volume); dye_.reset(colour);
   for (auto& d : drops_) d.volume = 0;
   lastDown_ = {0,-1,0}; flow_ = {0,0,0};
-  agitation_ = 0;
+  agitation_ = 0; incomingVolume_ = 0; incomingDye_ = {0,0,0};
   dyeTime_ = splashCooldown_ = stirCooldown_ = 0;
   spawnSerial_ = 0; seeded_ = false;
 }
@@ -163,7 +163,22 @@ float WaterEffects::pourTo(WaterEffects& receiver, float dt) {
   receiver.surface_.setVolume(receiver.surface_.volume()+amount);
   if (empty) receiver.dye_.reset(colour);
   const Vec3 p = receiver.inlet();
-  receiver.dye_.inject(p,colour,amount,0.13f);
+  // Accumulate sub-cell inflow before depositing a resolved parcel. Water
+  // volume transfers immediately; this small dye budget avoids painting a
+  // full-strength core for every arbitrarily tiny trickle/time step.
+  receiver.incomingVolume_ += amount;
+  receiver.incomingDye_.red += colour.red*amount;
+  receiver.incomingDye_.blue += colour.blue*amount;
+  receiver.incomingDye_.green += colour.green*amount;
+  constexpr float parcelVolume = 0.001f;
+  if (receiver.incomingVolume_ >= parcelVolume) {
+    const float inv = 1.0f/receiver.incomingVolume_;
+    const DyeSample parcel{receiver.incomingDye_.red*inv,receiver.incomingDye_.blue*inv,
+                           receiver.incomingDye_.green*inv};
+    receiver.dye_.inject(p,parcel,receiver.incomingVolume_,0.13f,true);
+    receiver.incomingVolume_ = 0;
+    receiver.incomingDye_ = {0,0,0};
+  }
   if (receiver.stirCooldown_ <= 0) {
     receiver.dye_.stir(p,-receiver.surface_.up(),4.0f);
     receiver.stirCooldown_ = 0.45f;
@@ -179,17 +194,36 @@ void WaterEffects::renderPanel(const Panel& panel, float cubeSide, uint8_t* rgba
   const Vec3 corner = panel.origin*invSide;
   const Vec3 cu = panel.u*((float)panel.w*invSide/size);
   const Vec3 cv = panel.v*((float)panel.h*invSide/size);
+  // Use one coherent RGB sample per ray. Select the strongest departure
+  // from the bulk colour so internal plumes remain visible on opaque faces.
+  // Independent channel maxima falsely made separate red/blue layers pink.
+  DyeSample mean{0,0,0};
+  int wetCells = 0;
+  for (int z = 0; z < size; ++z) for (int y = 0; y < size; ++y)
+    for (int x = 0; x < size; ++x) {
+      const Vec3 p{((float)x+0.5f)/size-0.5f,((float)y+0.5f)/size-0.5f,
+                   ((float)z+0.5f)/size-0.5f};
+      if (surface_.depth(p) < 0) continue;
+      const DyeSample d = dye_.cell(x,y,z);
+      mean.red += d.red; mean.blue += d.blue; mean.green += d.green;
+      ++wetCells;
+    }
+  if (wetCells) {
+    const float inv = 1.0f/(float)wetCells;
+    mean.red *= inv; mean.blue *= inv; mean.green *= inv;
+  }
   for (int y = 0; y < size; ++y) for (int x = 0; x < size; ++x) {
     Vec3 p = corner+cu*((float)x+0.5f)+cv*((float)y+0.5f)+panel.n*(0.5f/size);
-    float red = 0.0f, blue = 0.0f, green = 0.0f;
+    float red = 0.0f, blue = 0.0f, green = 0.0f, best = -1.0f;
     for (int z = 0; z < size; ++z, p += panel.n*(1.0f/size)) {
       if (surface_.depth(p) < 0) continue;
       const DyeSample d = dye_.cell((int)((p.x+0.5f)*size),(int)((p.y+0.5f)*size),
                                     (int)((p.z+0.5f)*size));
-      // Maximum-intensity projection exposes internal wisps on opaque LEDs.
-      // Front-to-back alpha compositing hid them behind the uniformly dyed
-      // foreground. All channels still come from the same evolving 3D field.
-      red = pmax(red,d.red); blue = pmax(blue,d.blue); green = pmax(green,d.green);
+      const float dr = d.red-mean.red, db = d.blue-mean.blue, dg = d.green-mean.green;
+      const float contrast = dr*dr+db*db+dg*dg;
+      if (contrast > best) {
+        best = contrast; red = d.red; blue = d.blue; green = d.green;
+      }
     }
     const float sum = pmax(red,pmax(green,blue));
     const float opacity = sum/(0.12f+sum);

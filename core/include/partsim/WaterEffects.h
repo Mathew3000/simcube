@@ -13,7 +13,7 @@ class WaterEffects {
   void impulse(Vec3 accelerationG);
   float pourTo(WaterEffects& receiver, float dt);
   void addInk(DyeSample colour);
-  void recolour(DyeSample colour) { dye_.reset(colour); }
+  void recolour(DyeSample colour) { dye_.reset(colour); incomingVolume_ = 0; incomingDye_ = {0,0,0}; }
   void renderPanel(const Panel& panel, float cubeSide, uint8_t* rgba) const;
   float volume() const;
   float airborneVolume() const;
@@ -28,6 +28,8 @@ class WaterEffects {
   Droplet drops_[kDrops] = {};
   Vec3 lastDown_{0,-1,0}, flow_{0,0,0};
   float agitation_ = 0;
+  float incomingVolume_ = 0;
+  DyeSample incomingDye_{0,0,0};
   float dyeTime_ = 0, splashCooldown_ = 0, stirCooldown_ = 0;
   unsigned spawnSerial_ = 0;
   bool seeded_ = false;

@@ -14,8 +14,9 @@ class DyeField {
   void reset(DyeSample colour);
   DyeSample sample(Vec3 p) const;
   DyeSample cell(int x, int y, int z) const;
-  // Replace locally by incoming coloured liquid, not a cube-wide average.
-  void inject(Vec3 position, DyeSample colour, float amount, float radius = 0.12f);
+  // Blend local ink, or replace a resolved liquid parcel with a pure core.
+  // liquidParcel is used only after the caller accumulates a sub-grid budget.
+  void inject(Vec3 position, DyeSample colour, float amount, float radius = 0.12f, bool liquidParcel = false);
   void stir(Vec3 position, Vec3 down, float strength);
   void step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, float agitation = 0.0f);
 

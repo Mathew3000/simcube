@@ -44,7 +44,7 @@ DyeSample DyeField::sampleBuffer(int buffer, Vec3 p) const {
   return result;
 }
 
-void DyeField::inject(Vec3 position, DyeSample colour, float amount, float radius) {
+void DyeField::inject(Vec3 position, DyeSample colour, float amount, float radius, bool liquidParcel) {
   if (!(amount > 0.0f)) return;
   radius = pclamp(radius,0.07f,0.3f);
   const float invR2 = 1.0f/(radius*radius);
@@ -60,7 +60,9 @@ void DyeField::inject(Vec3 position, DyeSample colour, float amount, float radiu
       const Vec3 p{((float)x+0.5f)/kSize-0.5f, ((float)y+0.5f)/kSize-0.5f,
                    ((float)z+0.5f)/kSize-0.5f};
       const float t = pmax(0.0f,1.0f-length2(p-position)*invR2);
-      const float a = strength*t*t;
+      // A resolved parcel displaces the receiving dye in its core. Only its
+      // thin boundary starts blended; subsequent diffusion mixes inward.
+      const float a = liquidParcel ? pclamp(t/(1.0f-0.65f*0.65f),0.0f,1.0f) : strength*t*t;
       auto& c = grid_[front_][index(x,y,z)];
       if (a > 0) diffusionRemainder_[index(x,y,z)][0] = diffusionRemainder_[index(x,y,z)][1] = diffusionRemainder_[index(x,y,z)][2] = 0;
       c[0] = pack((float)c[0]*(1.0f/65535.0f)*(1.0f-a)+colour.red*a);
