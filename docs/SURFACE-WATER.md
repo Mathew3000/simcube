@@ -3,7 +3,7 @@
 Branch: `feature/lightweight-water`.
 
 The C++ backend emulates a container's visible water surface, detached droplets
-and slowly advected colour. It does not solve particle pressure throughout the
+and slowly advected, continuously diffusing colour. It does not solve particle pressure throughout the
 water volume. The existing PBF scenes and ESP32 firmware remain separate.
 
 ## Try it
@@ -21,7 +21,8 @@ changes; reload the browser page as well.
 
 - Pick a cube, then **drag/flick** or use pitch/roll. Rapid movement sheds droplets
   from the intersections of the waterline with the walls/edges. Gentle tilts stay
-  calm. **Shake** adds an explicit impulse.
+  calm. Both gentle sloshing and **Shake** accelerate colour mixing; diffusion
+  continues when the cube rests.
 - **Tip to pour** transfers water and the *local outlet colour* into the next cube.
   Incoming colour enters a small region and is advected into plumes and curls;
   the receiver is not recoloured by a global weighted average.
@@ -52,7 +53,7 @@ model or GPU-only shader. Relevant files:
 | Component | Responsibility |
 |---|---|
 | `SurfaceWater.h/.cpp` | Conserved bulk volume, orientation-aware fill plane and damped slosh |
-| `DyeField.h/.cpp` | Shared 16³ red/blue concentration field, local injection and advection |
+| `DyeField.h/.cpp` | Shared 16³ red/blue concentration field, local injection, advection and diffusion |
 | `WaterEffects.h/.cpp` | Droplets, local colour transfer and field/droplet rendering |
 | `platform/wasm/surface_bindings.cpp` | Small standalone WASM API for two cubes |
 | `platform/wasm/web/surface.html`, `surface.js` | Interactive controls and existing six-face viewer |
@@ -78,6 +79,21 @@ a reverse sample to estimate error, and a correction clamped to old source-cell
 bounds. Three fixed buffers avoid update-order dependence. Higher precision
 retains faint concentrations during slow motion; the limiter prevents ringing
 and negative dye. A backtrace displacement cap limits jumps to 0.75 cell/update.
+
+After advection, a six-neighbour diffusion pass exchanges colour between wet
+cells, with no diffusion flux through the walls or waterline. Its rate never
+falls to zero: the baseline coefficient is 0.2 grid-cell²/s, rising to 4.8 with
+agitation. Angular travel and acceleration impulses build an agitation envelope
+that decays with a roughly two-second time constant. Gentle tilting also drives
+circulation, without needing to cross the droplet-spawning threshold.
+
+An 8 KiB signed fractional-remainder buffer accumulates diffusion changes smaller
+than one Q0.16 unit, preventing persistent rounding stalls. Once a channel's
+entire wet-field range is at most 64/65535 (0.1% concentration), it finishes at
+its rounded wet-cell mean, including dry ghost cells. This last, visually tiny
+step ensures completely uniform colour. Visible plumes are never globally
+averaged. Mixing time depends on the distribution and motion, rather than a
+fixed timer; new ink starts another local plume after a completed mix.
 
 Dry cells extend nearby liquid colour as a boundary condition and are excluded
 from rendering. All faces sample the same field. Rendering forms six 16²
@@ -109,8 +125,9 @@ handles inter-cube transfer; individual droplets do not themselves cross the rad
 
 ## Memory and timing
 
-Measured object size on the native/WASM build: **50,736 bytes per cube** (about
-49.5 KiB). Of that, 48 KiB is the three dye buffers. The minimal `SurfaceWater`
+Measured object size on the native/WASM build: **58,932 bytes per cube** (about
+57.6 KiB). Of that, 48 KiB is the three dye buffers and 8 KiB holds diffusion
+remainders. The minimal `SurfaceWater`
 object remains 56 bytes; firmware can still use it alone.
 
 The face compositor uses a 768-byte temporary projection. Caller-owned RGBA
@@ -131,13 +148,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 build/tests/partsim_tests surface_water
 build/tests/partsim_tests effects
-build/tests/partsim_tests dye_injection
+build/tests/partsim_tests dye_
 build/platform/host/partsim_surface_bench
 node scripts/check_surface.mjs
 ```
 
 Tests cover analytic volume, tilt/inversion, localized dye injection and transport,
-uniform-field stability, concentration bounds, gentle versus fast motion,
+uniform-field stability, complete resting-water homogenization, faster mixing
+under gentle sloshing, concentration bounds, gentle versus fast motion,
 droplet detachment/rejoining, transfer conservation, receiver capacity including
 droplets, buffer guards, and visible droplet pixels above the waterline. The Node
 check exercises the actual WASM API at 8², 32² and 64². Browser checks cover ink,

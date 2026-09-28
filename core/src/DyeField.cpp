@@ -13,6 +13,7 @@ Vec3 inside(Vec3 p) {
 void DyeField::reset(DyeSample colour) {
   const uint16_t r = pack(colour.red), b = pack(colour.blue);
   for (auto& buffer : grid_) for (auto& c : buffer) { c[0] = r; c[1] = b; }
+  for (auto& r : diffusionRemainder_) r[0] = r[1] = 0;
   for (auto& v : vortices_) v.strength = 0.0f;
   front_ = nextVortex_ = 0;
   jet_ = 0.0f;
@@ -61,6 +62,7 @@ void DyeField::inject(Vec3 position, DyeSample colour, float amount, float radiu
       const float t = pmax(0.0f,1.0f-length2(p-position)*invR2);
       const float a = strength*t*t;
       auto& c = grid_[front_][index(x,y,z)];
+      if (a > 0) diffusionRemainder_[index(x,y,z)][0] = diffusionRemainder_[index(x,y,z)][1] = 0;
       c[0] = pack((float)c[0]*(1.0f/65535.0f)*(1.0f-a)+colour.red*a);
       c[1] = pack((float)c[1]*(1.0f/65535.0f)*(1.0f-a)+colour.blue*a);
     }
@@ -106,7 +108,7 @@ Vec3 DyeField::displacement(Vec3 p, float dt, Vec3 down, Vec3 bulkVelocity) cons
   return displacement;
 }
 
-void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity) {
+void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, float agitation) {
   if (!(dt > 0.0f)) return;
   dt = pmin(dt,0.05f);
   const Vec3 down = -water.up();
@@ -167,10 +169,69 @@ void DyeField::step(float dt, const SurfaceWater& water, Vec3 bulkVelocity) {
       }
     }
   front_ = corrected;
+  diffuse(dt,water,agitation);
   for (auto& v : vortices_) {
     v.strength *= 1.0f-dt*0.18f;
     v.position = inside(v.position+down*(dt*0.035f));
   }
   jet_ *= 1.0f-dt*0.3f;
+}
+
+void DyeField::diffuse(float dt, const SurfaceWater& water, float agitation) {
+  // Six-neighbour diffusion, with no flux through the walls or waterline.
+  // Motion raises diffusivity; the nonzero floor keeps still water mixing.
+  // lambda <= 1/6 makes this explicit stencil a convex combination.
+  const float lambda = pmin(1.0f/6.0f,dt*(0.2f+4.6f*pclamp(agitation,0.0f,1.0f)));
+  const int back = (front_+1)%3;
+  const Vec3 up = water.up();
+  const float strideDepth[] = {-up.x/kSize,-up.y/kSize,-up.z/kSize};
+  const int strides[] = {1,kSize,kSize*kSize};
+  uint32_t sum[2] = {};
+  uint16_t lo[2] = {65535,65535}, hi[2] = {};
+  int count = 0;
+  for (int z = 0; z < kSize; ++z) for (int y = 0; y < kSize; ++y)
+    for (int x = 0; x < kSize; ++x) {
+      const int idx = index(x,y,z);
+      const Vec3 p{((float)x+0.5f)/kSize-0.5f,((float)y+0.5f)/kSize-0.5f,
+                   ((float)z+0.5f)/kSize-0.5f};
+      const float depth = water.depth(p);
+      const auto& old = grid_[front_][idx];
+      auto& next = grid_[back][idx];
+      if (depth < 0) {
+        next[0] = old[0]; next[1] = old[1];
+        diffusionRemainder_[idx][0] = diffusionRemainder_[idx][1] = 0;
+        continue;
+      }
+      int laplacian[2] = {};
+      const int coords[] = {x,y,z};
+      for (int axis = 0; axis < 3; ++axis) for (int sign = -1; sign <= 1; sign += 2) {
+        if (coords[axis]+sign < 0 || coords[axis]+sign >= kSize ||
+            depth+(float)sign*strideDepth[axis] < 0) continue;
+        const auto& neighbour = grid_[front_][idx+sign*strides[axis]];
+        for (int c = 0; c < 2; ++c) laplacian[c] += (int)neighbour[c]-(int)old[c];
+      }
+      ++count;
+      for (int c = 0; c < 2; ++c) {
+        const float value = pclamp((float)old[c]+lambda*(float)laplacian[c]+
+                            (float)diffusionRemainder_[idx][c]*(1.0f/128.0f),0.0f,65535.0f);
+        next[c] = (uint16_t)(value+0.5f);
+        const float error = (value-(float)next[c])*128.0f;
+        diffusionRemainder_[idx][c] = (int8_t)(error+(error >= 0 ? 0.5f : -0.5f));
+        sum[c] += next[c];
+        if (next[c] < lo[c]) lo[c] = next[c];
+        if (next[c] > hi[c]) hi[c] = next[c];
+      }
+    }
+  front_ = back;
+  if (!count) return;
+  // Finish below 0.1% concentration contrast. This removes the final integer
+  // precision floor, per channel, without averaging visible unmixed plumes.
+  for (int c = 0; c < 2; ++c) if ((int)hi[c]-(int)lo[c] <= 64) {
+    const uint16_t mean = (uint16_t)((sum[c]+(uint32_t)count/2u)/(uint32_t)count);
+    for (int i = 0; i < kCells; ++i) {
+      grid_[front_][i][c] = mean;
+      diffusionRemainder_[i][c] = 0;
+    }
+  }
 }
 }  // namespace partsim

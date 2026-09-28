@@ -17,11 +17,14 @@ class DyeField {
   // Replace locally by incoming coloured liquid, not a cube-wide average.
   void inject(Vec3 position, DyeSample colour, float amount, float radius = 0.12f);
   void stir(Vec3 position, Vec3 down, float strength);
-  void step(float dt, const SurfaceWater& water, Vec3 bulkVelocity);
+  void step(float dt, const SurfaceWater& water, Vec3 bulkVelocity, float agitation = 0.0f);
 
  private:
   struct Vortex { Vec3 position, axis; float strength; };
   uint16_t grid_[3][kCells][2] = {};
+  // Fractional diffusion increments survive Q0.16 rounding (8 KiB).
+  int8_t diffusionRemainder_[kCells][2] = {};
+  void diffuse(float dt, const SurfaceWater& water, float agitation);
   DyeSample sampleBuffer(int buffer, Vec3 p) const;
   Vec3 displacement(Vec3 p, float dt, Vec3 down, Vec3 bulkVelocity) const;
   Vortex vortices_[6] = {};

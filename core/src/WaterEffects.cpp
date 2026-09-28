@@ -16,6 +16,7 @@ void WaterEffects::reset(float volume, DyeSample colour) {
   surface_.reset(volume); dye_.reset(colour);
   for (auto& d : drops_) d.volume = 0;
   lastDown_ = {0,-1,0}; flow_ = {0,0,0};
+  agitation_ = 0;
   dyeTime_ = splashCooldown_ = stirCooldown_ = 0;
   spawnSerial_ = 0; seeded_ = false;
 }
@@ -89,6 +90,7 @@ void WaterEffects::impulse(Vec3 accelerationG) {
   surface_.impulse(a);
   flow_ = capped(flow_+a*0.6f,2.0f);
   const float strength = length(a);
+  agitation_ = pmin(1.0f,agitation_+strength*0.35f);
   if (strength > 0.5f) {
     splash(a,strength);
     dye_.stir(inlet(),-surface_.up(),pmin(5.0f,strength));
@@ -102,13 +104,17 @@ void WaterEffects::step(float dt, Vec3 down) {
   down = length2(down) > 1e-8f ? normalize(down) : lastDown_;
   const Vec3 change = down-lastDown_;
   const float speed = seeded_ ? length(change)/dt : 0.0f;
+  // Accumulate angular travel, not a single-frame speed peak. Even gentle
+  // sloshing stirs dye; the envelope persists through 30 Hz dye updates.
+  agitation_ = pmin(1.0f,agitation_+speed*dt*1.5f);
+  agitation_ *= pmax(0.0f,1.0f-dt*0.5f);
+  if (seeded_) flow_ = capped(flow_-change*1.8f,2.0f);
   seeded_ = true; lastDown_ = down;
   splashCooldown_ -= dt; stirCooldown_ -= dt;
   // Actual orientation changes trigger droplets: not restricted to Shake.
   if (speed > 1.8f && splashCooldown_ <= 0) {
     const float strength = pclamp(speed*0.3f,0.7f,3.0f);
     splash(-change,strength);
-    flow_ = capped(flow_-change*1.8f,2.0f);
     splashCooldown_ = 0.10f;
   }
   surface_.step(dt,down);
@@ -139,7 +145,7 @@ void WaterEffects::step(float dt, Vec3 down) {
   dyeTime_ += dt;
   // 30 Hz dye; 120 Hz surface/drops. No dependence on panel resolution.
   while (dyeTime_ >= 1.0f/30.0f) {
-    if (surface_.volume() > 1e-5f) dye_.step(1.0f/30.0f,surface_,flow_);
+    if (surface_.volume() > 1e-5f) dye_.step(1.0f/30.0f,surface_,flow_,agitation_);
     dyeTime_ -= 1.0f/30.0f;
   }
 }

@@ -111,3 +111,71 @@ TEST(effects_renderer_keeps_bounds_and_draws_drops_in_air) {
   }
   CHECK(airPixels > 0);
 }
+
+namespace {
+struct DyeStats { float redRange, blueRange, meanRed, meanBlue; };
+DyeStats dyeStats(const DyeField& dye, const SurfaceWater& water) {
+  float loR = 1, hiR = 0, loB = 1, hiB = 0, sumR = 0, sumB = 0;
+  int count = 0;
+  for (int z = 0; z < DyeField::kSize; ++z)
+    for (int y = 0; y < DyeField::kSize; ++y)
+      for (int x = 0; x < DyeField::kSize; ++x) {
+        const Vec3 p{((float)x+0.5f)/DyeField::kSize-0.5f,
+                     ((float)y+0.5f)/DyeField::kSize-0.5f,
+                     ((float)z+0.5f)/DyeField::kSize-0.5f};
+        if (water.depth(p) < 0) continue;
+        const auto c = dye.cell(x,y,z);
+        loR = pmin(loR,c.red); hiR = pmax(hiR,c.red);
+        loB = pmin(loB,c.blue); hiB = pmax(hiB,c.blue);
+        sumR += c.red; sumB += c.blue; ++count;
+      }
+  return {hiR-loR,hiB-loB,sumR/(float)count,sumB/(float)count};
+}
+}
+
+TEST(dye_diffusion_finishes_both_channels_without_motion) {
+  SurfaceWater water;
+  water.reset(0.6f);
+  DyeField dye;
+  dye.reset({0.8f,0});
+  dye.inject({-0.2f,-0.2f,-0.2f},{0,1},0.08f,0.3f);
+  for (int i = 0; i < 30; ++i) dye.step(1.0f/30.0f,water,{0,0,0});
+  auto stats = dyeStats(dye,water);
+  CHECK(stats.blueRange > 0.1f); // A visible plume survives the initial second.
+  // Neither stir() nor any velocity: diffusion must outlive vortex decay and
+  // pass through the Q0.16 precision floor to a completely uniform field.
+  for (int i = 0; i < 27000; ++i) {
+    dye.step(1.0f/30.0f,water,{0,0,0});
+    if (i%30 == 0) {
+      stats = dyeStats(dye,water);
+      if (stats.redRange == 0 && stats.blueRange == 0) break;
+    }
+  }
+  CHECK(stats.redRange == 0 && stats.blueRange == 0);
+  CHECK(stats.meanBlue > 0.005f && stats.meanRed > 0.5f);
+  const DyeSample mixed = dye.cell(4,4,4);
+  for (int i = 0; i < 60; ++i) dye.step(1.0f/30.0f,water,{0,0,0});
+  CHECK_NEAR(dye.cell(4,4,4).red,mixed.red,1e-6f);
+  CHECK_NEAR(dye.cell(4,4,4).blue,mixed.blue,1e-6f);
+  // New ink must remain local even after a completed mix.
+  dye.inject({0,-0.2f,0},{0,1},0.02f);
+  CHECK(dyeStats(dye,water).blueRange > 0.1f);
+}
+
+TEST(effects_sloshing_accelerates_mixing_without_requiring_splashes) {
+  WaterEffects still, moving;
+  still.reset(0.7f,{0.8f,0}); moving.reset(0.7f,{0.8f,0});
+  still.addInk({0,1}); moving.addInk({0,1});
+  for (int i = 0; i < 1200; ++i) {
+    const float angle = 0.3f*fsin((float)i*(2.0f/120.0f));
+    still.step(1.0f/120.0f,{0,-1,0});
+    moving.step(1.0f/120.0f,{fsin(angle),-fcos(angle),0});
+    CHECK(moving.dropletCount() == 0);
+  }
+  const auto a = dyeStats(still.dye(),still.surface());
+  const auto b = dyeStats(moving.dye(),moving.surface());
+  CHECK(b.blueRange < a.blueRange*0.5f);
+  CHECK(b.meanBlue > 0.0001f); // Mixing must not just erase the ink.
+  CHECK_NEAR(still.volume(),0.7f,1e-6f);
+  CHECK_NEAR(moving.volume(),0.7f,1e-6f);
+}

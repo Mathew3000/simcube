@@ -27,6 +27,7 @@ class WaterEffects {
   DyeField dye_;
   Droplet drops_[kDrops] = {};
   Vec3 lastDown_{0,-1,0}, flow_{0,0,0};
+  float agitation_ = 0;
   float dyeTime_ = 0, splashCooldown_ = 0, stirCooldown_ = 0;
   unsigned spawnSerial_ = 0;
   bool seeded_ = false;
